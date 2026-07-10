@@ -6,12 +6,16 @@ import config
 from utils.logger import logger
 
 
-class DialogueView(discord.ui.View):
+class DialogueView(discord.ui.LayoutView):
     """
-    Interactive view that drives the step-by-step training dialogue.
+    Interactive Components V2 container that drives the step-by-step
+    training dialogue.
 
     Each "Gamblors" line becomes a clickable button (the user's response).
-    "Intern" lines are displayed in the embed automatically.
+    "Intern" lines are displayed in the container body automatically.
+
+    Rendered as a single card (title, body, progress, button) to match the
+    look of VideoDayView, instead of separate title/content embeds.
 
     The view is posted in the user's private training channel.
     Only the enrolled user can interact with it.
@@ -19,6 +23,7 @@ class DialogueView(discord.ui.View):
 
     def __init__(
         self,
+        title: str,
         content: List[Tuple[str, str]],
         on_complete: Optional[Callable] = None,
         user_id: Optional[int] = None,
@@ -26,6 +31,7 @@ class DialogueView(discord.ui.View):
         on_button_click: Optional[Callable] = None,
     ):
         super().__init__(timeout=timeout)
+        self.title = title
         self.content = content
         self.on_complete_callback = on_complete
         self.on_button_click = on_button_click
@@ -34,7 +40,20 @@ class DialogueView(discord.ui.View):
         self.message: Optional[discord.Message] = None
         self._completed = False
 
-        self._render_buttons()
+        self._header = discord.ui.TextDisplay(f"## {title}")
+        self._body = discord.ui.TextDisplay(self._body_text())
+        self._button = discord.ui.Button()
+
+        self.add_item(
+            discord.ui.Container(
+                self._header,
+                self._body,
+                discord.ui.ActionRow(self._button),
+                accent_colour=config.EMBED_COLOR,
+            )
+        )
+
+        self._configure_button()
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         """Reject button presses from users other than the enrolled trainee."""
@@ -45,19 +64,20 @@ class DialogueView(discord.ui.View):
             return False
         return True
 
-    def _render_buttons(self):
-        """Rebuild the button row for the current position."""
-        self.clear_items()
+    def _body_text(self) -> str:
+        speaker, message = self.content[self.current_index]
+        progress = f"-# {speaker}  •  {self.current_index + 1}/{len(self.content)}"
+        return f"{message}\n\n{progress}"
 
+    def _configure_button(self):
+        """Point the single button at the current step's action."""
         at_end = self.current_index >= len(self.content) - 1
 
         if at_end:
-            btn = discord.ui.Button(
-                label="Complete",
-                style=discord.ButtonStyle.success,
-                custom_id="dialogue_complete",
-            )
-            btn.callback = self._on_complete
+            self._button.label = "Complete"
+            self._button.style = discord.ButtonStyle.success
+            self._button.custom_id = "dialogue_complete"
+            self._button.callback = self._on_complete
         else:
             next_speaker, next_msg = self.content[self.current_index + 1]
             if next_speaker == "Gamblors":
@@ -65,14 +85,10 @@ class DialogueView(discord.ui.View):
             else:
                 label = "Next"
 
-            btn = discord.ui.Button(
-                label=label,
-                style=discord.ButtonStyle.primary,
-                custom_id="dialogue_next",
-            )
-            btn.callback = self._on_next
-
-        self.add_item(btn)
+            self._button.label = label
+            self._button.style = discord.ButtonStyle.primary
+            self._button.custom_id = "dialogue_next"
+            self._button.callback = self._on_next
 
     async def _on_next(self, interaction: discord.Interaction):
         await interaction.response.defer()
@@ -84,13 +100,10 @@ class DialogueView(discord.ui.View):
                 logger.warning(f"on_button_click hook error: {exc}")
 
         self.current_index += 1
-        self._render_buttons()
+        self._body.content = self._body_text()
+        self._configure_button()
         try:
-            await interaction.message.edit(
-                content=None,
-                embed=self._build_embed(),
-                view=self,
-            )
+            await interaction.message.edit(view=self)
         except Exception as exc:
             logger.error(f"DialogueView._on_next edit failed: {exc}")
 
@@ -104,12 +117,10 @@ class DialogueView(discord.ui.View):
                 logger.warning(f"on_button_click hook error: {exc}")
 
         self._completed = True
-
-        for item in self.children:
-            item.disabled = True  # type: ignore[attr-defined]
+        self._button.disabled = True
 
         try:
-            await interaction.message.edit(content=None, view=self)
+            await interaction.message.edit(view=self)
         except Exception as exc:
             logger.error(f"DialogueView._on_complete edit failed: {exc}")
 
@@ -121,20 +132,10 @@ class DialogueView(discord.ui.View):
 
         logger.info(f"User {interaction.user.id} completed a dialogue")
 
-    def _build_embed(self) -> discord.Embed:
-        speaker, message = self.content[self.current_index]
-        embed = discord.Embed(description=message, color=config.EMBED_COLOR)
-        embed.set_footer(
-            text=f"{speaker}  •  {self.current_index + 1}/{len(self.content)}"
-        )
-        return embed
-
-    def get_initial_embed(self) -> discord.Embed:
-        return self._build_embed()
-
     def _spawn_resumed_view(self) -> "DialogueView":
         timeout = self.timeout if self.timeout is not None else 600
         resumed_view = DialogueView(
+            self.title,
             self.content,
             on_complete=self.on_complete_callback,
             user_id=self.user_id,
@@ -143,7 +144,8 @@ class DialogueView(discord.ui.View):
         )
         resumed_view.current_index = self.current_index
         resumed_view.message = self.message
-        resumed_view._render_buttons()
+        resumed_view._body.content = resumed_view._body_text()
+        resumed_view._configure_button()
         return resumed_view
 
     async def on_timeout(self):
@@ -152,10 +154,10 @@ class DialogueView(discord.ui.View):
 
         try:
             resumed_view = self._spawn_resumed_view()
-            await self.message.edit(
-                content="> Session timed out. Continue when ready.",
-                embed=resumed_view.get_initial_embed(),
-                view=resumed_view,
+            resumed_view._body.content = (
+                "-# Session timed out. Continue when ready.\n\n"
+                + resumed_view._body.content
             )
+            await self.message.edit(view=resumed_view)
         except Exception:
             pass

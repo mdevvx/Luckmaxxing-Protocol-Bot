@@ -7,14 +7,16 @@ from discord import app_commands
 from discord.ext import commands, tasks
 
 import config
-from content.training import get_content, get_day_title
+from content.training import get_content, get_day_title, get_day_video
 from database import get_database
 from database.base import DatabaseBase
 from utils.bot_logger import BotLogger
 from utils.logger import logger
 from views.dialogue import DialogueView
-from views.enrollment import EnrollmentView, create_enrollment_embed
-from views.graduation import GraduationActionsView, create_graduation_embed
+from views.enrollment import EnrollmentView
+from views.graduation import GraduationActionsView
+from views.text_card import TextCardView
+from views.video_day import VideoDayView
 
 # ──────────────────────────────────────────────────────────────────
 #  Constants
@@ -56,27 +58,23 @@ def _in_notify_window() -> bool:
     return False
 
 
-def _onboarding_embed(user: discord.Member) -> discord.Embed:
-    """Pinned embed posted at the top of every private training channel."""
-    embed = discord.Embed(
-        title="Welcome to your Luckmaxxing Training Channel",
-        description=(
-            f"Hey {user.mention}, this is your private space for the 8-day program.\n\n"
-            "**How it works**\n"
-            "• Each day's lesson appears here as an interactive dialogue.\n"
-            "• Read the **Intern's** message, then click the button to speak your response.\n"
-            "• Complete the dialogue to finish the day.\n"
-            "• Days 2–8 are posted automatically every 24 hours.\n\n"
-            "**Daily mantra** — repeat before sunrise and before any high-risk activity:\n"
-            "> *I am lucky. I am the luck.*\n\n"
-            "**Warning:** If you don't complete a day's training, you'll receive two reminders. "
-            "After the second reminder the session closes and that day's content will reappear the next day.\n\n"
-            "Gorillions await you."
-        ),
-        color=config.EMBED_COLOR,
+def _onboarding_view(user: discord.Member) -> TextCardView:
+    """Pinned container posted at the top of every private training channel."""
+    return TextCardView(
+        "Welcome to your Luckmaxxing Training Channel",
+        f"Hey {user.mention}, this is your private space for the 8-day program.\n\n"
+        "**How it works**\n"
+        "• Each day's lesson appears here as an interactive dialogue or video.\n"
+        "• Read the **Intern's** message, then click the button to speak your response.\n"
+        "• Complete the dialogue to finish the day.\n"
+        "• Days 2–8 are posted automatically every 24 hours.\n\n"
+        "**Daily mantra** — repeat before sunrise and before any high-risk activity:\n"
+        "> *I am lucky. I am the luck.*\n\n"
+        "**Warning:** If you don't complete a day's training, you'll receive two reminders. "
+        "After the second reminder the session closes and that day's content will reappear the next day.\n\n"
+        "Gorillions await you.",
+        "-# Only you and the bot can see this channel.",
     )
-    embed.set_footer(text="Only you and the bot can see this channel.")
-    return embed
 
 
 async def _get_training_channel(
@@ -297,7 +295,7 @@ class ProtocolCog(commands.Cog):
 
         # ── Post pinned onboarding embed ──────────────────────────
         try:
-            onboarding_msg = await channel.send(embed=_onboarding_embed(user))
+            onboarding_msg = await channel.send(view=_onboarding_view(user))
             await onboarding_msg.pin()
         except Exception as exc:
             logger.warning(f"Could not pin onboarding embed: {exc}")
@@ -339,6 +337,7 @@ class ProtocolCog(commands.Cog):
             await self._send_day(user, guild_id, 1, channel)
 
         view = DialogueView(
+            get_day_title(0),
             intro_content,
             on_complete=on_intro_done,
             user_id=user.id,
@@ -346,7 +345,7 @@ class ProtocolCog(commands.Cog):
                 self.db.update_last_button_click(user.id, guild_id)
             ),
         )
-        await self._post_dialogue(channel, view, get_day_title(0))
+        await self._post_container(channel, view)
 
     async def _send_day(
         self,
@@ -415,11 +414,8 @@ class ProtocolCog(commands.Cog):
                                 logger.warning(
                                     f"Missing permission to assign completion role {completion_role_id}"
                                 )
-                grad_view = GraduationActionsView(self.db)
-                await channel.send(
-                    embed=create_graduation_embed(user),
-                    view=grad_view,
-                )
+                grad_view = GraduationActionsView(self.db, user)
+                await channel.send(view=grad_view)
                 await self.bot_log.training_complete(guild, user)
                 logger.info(f"User {user.id} completed training in guild {guild_id}")
             else:
@@ -429,15 +425,27 @@ class ProtocolCog(commands.Cog):
                 )
                 await self.bot_log.day_complete(guild, user, day)
 
-        view = DialogueView(
-            content,
-            on_complete=on_day_done,
-            user_id=user.id,
-            on_button_click=lambda: asyncio.create_task(
-                self.db.update_last_button_click(user.id, guild_id)
-            ),
-        )
-        await self._post_dialogue(channel, view, get_day_title(day))
+        video = get_day_video(day)
+        if video:
+            video_view = VideoDayView(
+                get_day_title(day),
+                video["url"],
+                caption=video.get("caption"),
+                on_complete=on_day_done,
+                user_id=user.id,
+            )
+            await self._post_container(channel, video_view)
+        else:
+            view = DialogueView(
+                get_day_title(day),
+                content,
+                on_complete=on_day_done,
+                user_id=user.id,
+                on_button_click=lambda: asyncio.create_task(
+                    self.db.update_last_button_click(user.id, guild_id)
+                ),
+            )
+            await self._post_container(channel, view)
 
     async def send_day_content(
         self,
@@ -467,15 +475,12 @@ class ProtocolCog(commands.Cog):
         await self._send_day(user, guild_id, day, channel)
 
     @staticmethod
-    async def _post_dialogue(
+    async def _post_container(
         channel: discord.TextChannel,
-        view: DialogueView,
-        title: str,
+        view: DialogueView | VideoDayView,
     ):
-        """Send the title embed, then the interactive dialogue embed."""
-        title_embed = discord.Embed(title=title, color=config.EMBED_COLOR)
-        await channel.send(embed=title_embed)
-        msg = await channel.send(embed=view.get_initial_embed(), view=view)
+        """Send a day's lesson as a single Components V2 container."""
+        msg = await channel.send(view=view)
         view.message = msg
 
     # ──────────────────────────────────────────
@@ -767,7 +772,7 @@ class ProtocolCog(commands.Cog):
                 return
 
         view = EnrollmentView(on_enroll=self.handle_enrollment)
-        await channel.send(embed=create_enrollment_embed(), view=view)
+        await channel.send(view=view)
 
         await interaction.response.send_message(
             f"Setup complete in {channel.mention}.", ephemeral=True
@@ -785,15 +790,14 @@ class ProtocolCog(commands.Cog):
         total = stats["total_enrolled"]
         rate = f"{stats['completed'] / total * 100:.1f}%" if total else "N/A"
 
-        embed = discord.Embed(
-            title="Luckmaxxing Protocol — Statistics",
-            color=config.EMBED_COLOR,
+        view = TextCardView(
+            "Luckmaxxing Protocol — Statistics",
+            f"**Enrolled:** {total}\n"
+            f"**In Progress:** {stats['in_progress']}\n"
+            f"**Completed:** {stats['completed']}\n"
+            f"**Completion Rate:** {rate}",
         )
-        embed.add_field(name="Enrolled", value=total, inline=True)
-        embed.add_field(name="In Progress", value=stats["in_progress"], inline=True)
-        embed.add_field(name="Completed", value=stats["completed"], inline=True)
-        embed.add_field(name="Completion Rate", value=rate, inline=False)
-        await interaction.response.send_message(embed=embed)
+        await interaction.response.send_message(view=view)
 
     @app_commands.command(name="progress", description="Check your training progress")
     async def check_progress(self, interaction: discord.Interaction):
@@ -814,20 +818,22 @@ class ProtocolCog(commands.Cog):
         done = progress.get("completed", False)
         eid = progress.get("enrollment_id", "N/A")
 
-        embed = discord.Embed(title="Your Progress", color=config.EMBED_COLOR)
-
         if done:
-            embed.description = "You have completed the Luckmaxxing Protocol. You are a statistical anomaly."
+            body = "You have completed the Luckmaxxing Protocol. You are a statistical anomaly."
         else:
             bar = "█" * day + "░" * (config.TOTAL_DAYS - day)
-            embed.add_field(
-                name="Day", value=f"{day} / {config.TOTAL_DAYS}", inline=True
+            body = (
+                f"**Day:** {day} / {config.TOTAL_DAYS}\n"
+                f"**Enrollment ID:** `{eid}`\n"
+                f"**Progress:** `{bar}`"
             )
-            embed.add_field(name="Enrollment ID", value=f"`{eid}`", inline=True)
-            embed.add_field(name="Progress", value=f"`{bar}`", inline=False)
 
-        embed.set_footer(text=f"Enrolled: {progress.get('enrolled_at', 'Unknown')}")
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        view = TextCardView(
+            "Your Progress",
+            body,
+            f"-# Enrolled: {progress.get('enrolled_at', 'Unknown')}",
+        )
+        await interaction.response.send_message(view=view, ephemeral=True)
 
 
 async def setup(bot: commands.Bot):

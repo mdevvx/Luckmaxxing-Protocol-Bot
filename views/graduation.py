@@ -10,44 +10,69 @@ _CLOSE_BUTTON_ID = "graduation_close_channel"
 _KEEP_OPEN_BUTTON_ID = "graduation_keep_open"
 
 
-def create_graduation_embed(
-    user: Union[discord.Member, discord.User],
-    *,
-    questions_enabled: bool = False,
-) -> discord.Embed:
-    """Return the completion embed posted after Day 8."""
-    embed = discord.Embed(
-        title="Luckmaxxing Protocol Complete",
-        description=(
-            f"{user.mention}, you finished the 8-Day Luckmaxxing Protocol.\n\n"
-            f"You are now a **{config.GRADUATE_ROLE_NAME}** and a **statistical anomaly**.\n\n"
-            "Use the buttons below to close this channel or keep it open for questions or feedback."
-        ),
-        color=config.EMBED_COLOR,
-    )
+class GraduationActionsView(discord.ui.LayoutView):
+    """Persistent Components V2 container for the final post-training channel decision."""
 
-    if questions_enabled:
-        embed.add_field(
-            name="Questions unlocked",
-            value="You can type in this channel now. Close it any time with the red button.",
-            inline=False,
-        )
-        embed.set_footer(text="Badge unlocked. Questions and feedback are enabled.")
-    else:
-        embed.set_footer(text="Badge unlocked. Choose what happens to this channel next.")
-
-    return embed
-
-
-class GraduationActionsView(discord.ui.View):
-    """Persistent controls for the final post-training channel decision."""
-
-    def __init__(self, db: DatabaseBase, *, questions_enabled: bool = False):
+    def __init__(
+        self,
+        db: DatabaseBase,
+        user: Optional[Union[discord.Member, discord.User]] = None,
+        *,
+        questions_enabled: bool = False,
+    ):
         super().__init__(timeout=None)
         self.db = db
 
+        self._close_button = discord.ui.Button(
+            label="Chief, me ready use powers.",
+            style=discord.ButtonStyle.danger,
+            custom_id=_CLOSE_BUTTON_ID,
+        )
+        self._close_button.callback = self.close_channel
+
+        self._keep_open_button = discord.ui.Button(
+            label="Chief, me have question / feedback.",
+            style=discord.ButtonStyle.success,
+            custom_id=_KEEP_OPEN_BUTTON_ID,
+            disabled=questions_enabled,
+        )
+        self._keep_open_button.callback = self.keep_open
+
+        mention = user.mention if user else "Gamblor"
+        children = [
+            discord.ui.TextDisplay("## Luckmaxxing Protocol Complete"),
+            discord.ui.TextDisplay(
+                f"{mention}, you finished the 8-Day Luckmaxxing Protocol.\n\n"
+                f"You are now a **{config.GRADUATE_ROLE_NAME}** and a **statistical anomaly**.\n\n"
+                "Use the buttons below to close this channel or keep it open for questions or feedback."
+            ),
+        ]
+
         if questions_enabled:
-            self.keep_open.disabled = True
+            children.append(discord.ui.Separator())
+            children.append(
+                discord.ui.TextDisplay(
+                    "**Questions unlocked**\n"
+                    "You can type in this channel now. Close it any time with the red button."
+                )
+            )
+            children.append(
+                discord.ui.TextDisplay(
+                    "-# Badge unlocked. Questions and feedback are enabled."
+                )
+            )
+        else:
+            children.append(
+                discord.ui.TextDisplay(
+                    "-# Badge unlocked. Choose what happens to this channel next."
+                )
+            )
+
+        children.append(
+            discord.ui.ActionRow(self._close_button, self._keep_open_button)
+        )
+
+        self.add_item(discord.ui.Container(*children, accent_colour=config.EMBED_COLOR))
 
     async def _resolve_context(
         self, interaction: discord.Interaction
@@ -89,14 +114,7 @@ class GraduationActionsView(discord.ui.View):
 
         return True
 
-    @discord.ui.button(
-        label="Chief, me ready use powers.",
-        style=discord.ButtonStyle.danger,
-        custom_id=_CLOSE_BUTTON_ID,
-    )
-    async def close_channel(
-        self, interaction: discord.Interaction, button: discord.ui.Button
-    ) -> None:
+    async def close_channel(self, interaction: discord.Interaction) -> None:
         progress, channel = await self._resolve_context(interaction)
         if not progress or channel is None:
             if not interaction.response.is_done():
@@ -129,14 +147,7 @@ class GraduationActionsView(discord.ui.View):
                 ephemeral=True,
             )
 
-    @discord.ui.button(
-        label="Chief, me have question / feedback.",
-        style=discord.ButtonStyle.success,
-        custom_id=_KEEP_OPEN_BUTTON_ID,
-    )
-    async def keep_open(
-        self, interaction: discord.Interaction, button: discord.ui.Button
-    ) -> None:
+    async def keep_open(self, interaction: discord.Interaction) -> None:
         progress, channel = await self._resolve_context(interaction)
         if not progress or channel is None:
             if not interaction.response.is_done():
@@ -166,11 +177,11 @@ class GraduationActionsView(discord.ui.View):
             )
 
             await interaction.response.edit_message(
-                embed=create_graduation_embed(
+                view=GraduationActionsView(
+                    self.db,
                     interaction.user,
                     questions_enabled=True,
                 ),
-                view=GraduationActionsView(self.db, questions_enabled=True),
             )
             await interaction.followup.send(
                 "Questions and feedback are now enabled. Send your message here when ready.",

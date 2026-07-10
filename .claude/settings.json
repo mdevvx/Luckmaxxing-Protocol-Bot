@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -c \"import discord; print\\(discord.__version__\\); print\\(hasattr\\(discord.ui, 'Container'\\), hasattr\\(discord.ui, 'MediaGallery'\\), hasattr\\(discord.ui, 'LayoutView'\\)\\)\")",
+      "Bash(python -c ' *)",
+      "Read(//c/Users/Lenovo/AppData/Local/Programs/Python/Python313/Lib/site-packages/**)",
+      "Bash(python -m py_compile content/training.py views/video_day.py cogs/protocol.py)",
+      "Bash(python -m py_compile content/training.py views/dialogue.py views/video_day.py cogs/protocol.py)",
+      "Bash(python -m py_compile views/enrollment.py views/graduation.py views/text_card.py views/__init__.py cogs/protocol.py)"
+    ]
+  }
+}

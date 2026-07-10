@@ -4,6 +4,23 @@ from typing import Callable
 
 from utils.logger import logger
 
+_BANNER_URL = "https://cdn.discordapp.com/attachments/1474746304608473200/1501241764525375649/bot_banner.png?ex=69fb5bd8&is=69fa0a58&hm=91e56d6121d9557b6b42cc219ddf6102850d0e8c3dd23f62aaa8b505b23610d0&"
+
+_DESCRIPTION = (
+    "Welcome to the **8-Day Luckmaxxing Training Program**.\n\n"
+    "Transform from an average gamblor into a statistical anomaly. "
+    "Daily interactive lessons will be delivered in your own private channel.\n\n"
+    "**What to expect**\n"
+    "• Intro + Day 1 on enrollment\n"
+    "• Days 2 – 8 delivered automatically every 24 hours\n"
+    "• Click through dialogue to progress\n"
+    "• Scientifically-backed luck cultivation techniques\n\n"
+    "**Requirements**\n"
+    "• A valid enrollment code from an admin\n"
+    "• Commitment to daily practice\n\n"
+    "Click **Enroll** and enter your code to begin."
+)
+
 
 class EnrollmentModal(discord.ui.Modal, title="Enter Enrollment ID"):
     """
@@ -34,10 +51,10 @@ class EnrollmentModal(discord.ui.Modal, title="Enter Enrollment ID"):
                 )
 
 
-class EnrollmentView(discord.ui.View):
+class EnrollmentView(discord.ui.LayoutView):
     """
-    Persistent view (survives bot restarts) that shows the Enroll button
-    in the #luckmaxxing-protocol channel.
+    Persistent Components V2 container (survives bot restarts) that shows the
+    enrollment card and Enroll button in the #luckmaxxing-protocol channel.
     """
 
     def __init__(self, on_enroll: Callable):
@@ -48,14 +65,26 @@ class EnrollmentView(discord.ui.View):
         super().__init__(timeout=None)  # Persistent – no expiry
         self._on_enroll = on_enroll
 
-    @discord.ui.button(
-        label="Enroll in Luckmaxxing Protocol",
-        style=discord.ButtonStyle.success,
-        custom_id="luckmaxx_enroll",  # Stable ID required for persistence
-    )
-    async def enroll_button(
-        self, interaction: discord.Interaction, button: discord.ui.Button
-    ):
+        button = discord.ui.Button(
+            label="Enroll in Luckmaxxing Protocol",
+            style=discord.ButtonStyle.success,
+            custom_id="luckmaxx_enroll",  # Stable ID required for persistence
+        )
+        button.callback = self.enroll_button
+
+        self.add_item(
+            discord.ui.Container(
+                discord.ui.TextDisplay("## Luckmaxxing Protocol"),
+                discord.ui.MediaGallery(discord.MediaGalleryItem(media=_BANNER_URL)),
+                discord.ui.TextDisplay(_DESCRIPTION),
+                discord.ui.Separator(),
+                discord.ui.TextDisplay("-# Gorillions await you."),
+                discord.ui.ActionRow(button),
+                accent_colour=config.EMBED_COLOR,
+            )
+        )
+
+    async def enroll_button(self, interaction: discord.Interaction):
         try:
             modal = EnrollmentModal(on_submit=self._on_enroll)
             await interaction.response.send_modal(modal)
@@ -64,30 +93,3 @@ class EnrollmentView(discord.ui.View):
             await interaction.response.send_message(
                 "An error occurred. Please try again.", ephemeral=True
             )
-
-
-def create_enrollment_embed() -> discord.Embed:
-    """Return the embed posted in the #luckmaxxing-protocol channel."""
-    embed = discord.Embed(
-        title="Luckmaxxing Protocol",
-        description=(
-            "Welcome to the **8-Day Luckmaxxing Training Program**.\n\n"
-            "Transform from an average gamblor into a statistical anomaly. "
-            "Daily interactive lessons will be delivered in your own private channel.\n\n"
-            "**What to expect**\n"
-            "• Intro + Day 1 on enrollment\n"
-            "• Days 2 – 8 delivered automatically every 24 hours\n"
-            "• Click through dialogue to progress\n"
-            "• Scientifically-backed luck cultivation techniques\n\n"
-            "**Requirements**\n"
-            "• A valid enrollment code from an admin\n"
-            "• Commitment to daily practice\n\n"
-            "Click **Enroll** and enter your code to begin."
-        ),
-        color=config.EMBED_COLOR,
-    )
-    embed.set_footer(text="Gorillions await you.")
-    embed.set_image(
-        url="https://cdn.discordapp.com/attachments/1474746304608473200/1501241764525375649/bot_banner.png?ex=69fb5bd8&is=69fa0a58&hm=91e56d6121d9557b6b42cc219ddf6102850d0e8c3dd23f62aaa8b505b23610d0&"
-    )
-    return embed
