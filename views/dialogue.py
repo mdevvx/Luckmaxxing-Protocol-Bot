@@ -17,7 +17,7 @@ class DialogueView(discord.ui.LayoutView):
     Rendered as a single card (title, body, progress, button) to match the
     look of VideoDayView, instead of separate title/content embeds.
 
-    The view is posted in the user's private training channel.
+    The view is posted in the user's private training thread.
     Only the enrolled user can interact with it.
     """
 

@@ -6,9 +6,7 @@ import discord
 from discord.ext import commands
 
 import config
-from database import get_database
 from utils.logger import logger
-from views.graduation import GraduationActionsView
 
 
 class LuckmaxxingBot(commands.Bot):
@@ -21,7 +19,7 @@ class LuckmaxxingBot(commands.Bot):
         intents.guilds = True
 
         super().__init__(
-            command_prefix="!",  # Only used for legacy text commands (none currently)
+            command_prefix=["!", "$"],  # $sync registers commands to a guild
             intents=intents,
             help_command=None,
             case_insensitive=True,
@@ -40,9 +38,6 @@ class LuckmaxxingBot(commands.Bot):
                 logger.info(f"Loaded extension: {ext}")
             except Exception as exc:
                 logger.error(f"Failed to load {ext}: {exc}", exc_info=True)
-
-        # Register persistent views so graduation buttons survive bot restarts
-        self.add_view(GraduationActionsView(get_database()))
 
     async def on_ready(self):
         logger.info(f"Logged in as {self.user} (ID: {self.user.id})")
@@ -65,7 +60,7 @@ class LuckmaxxingBot(commands.Bot):
                 description=(
                     "Ready to transform your members into statistical anomalies.\n\n"
                     "**Quick start**\n"
-                    "1. `/configure role:<role> completion_role:<role> category:<category>` — set enrollment role, completion role, and channel category\n"
+                    "1. `/configure role:<role> completion_role:<role> threads_channel:<channel>` — set enrollment role, completion role, and threads channel\n"
                     "2. `/setup` — post the enrollment message\n"
                     "3. `/generateid count:10` — create enrollment codes for your members\n\n"
                     "Gorillions await."

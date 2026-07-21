@@ -9,7 +9,7 @@ _BANNER_URL = "https://cdn.discordapp.com/attachments/1474746304608473200/150124
 _DESCRIPTION = (
     "Welcome to the **8-Day Luckmaxxing Training Program**.\n\n"
     "Transform from an average gamblor into a statistical anomaly. "
-    "Daily interactive lessons will be delivered in your own private channel.\n\n"
+    "Daily interactive lessons will be delivered in your own private thread.\n\n"
     "**What to expect**\n"
     "• Intro + Day 1 on enrollment\n"
     "• Days 2 – 8 delivered automatically every 24 hours\n"

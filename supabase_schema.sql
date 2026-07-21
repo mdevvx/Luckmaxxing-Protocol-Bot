@@ -125,3 +125,70 @@ BEGIN
 END $$;
 
 ALTER TABLE enrollments ADD COLUMN IF NOT EXISTS last_button_click TIMESTAMPTZ;
+
+-- ─────────────────────────────────────────────────────────────
+--  7. Thread-based flow (v4.0)
+--     enrollments.channel_id is reused to store the private
+--     THREAD id now (not a channel id). category_id above is
+--     left in place but no longer used by the bot.
+-- ─────────────────────────────────────────────────────────────
+ALTER TABLE guild_settings ADD COLUMN IF NOT EXISTS threads_channel_id BIGINT; -- parent channel private training threads are created under
+ALTER TABLE enrollments    ADD COLUMN IF NOT EXISTS dm_ack BOOLEAN NOT NULL DEFAULT FALSE; -- user completed the "report to Papi" DM ritual
+
+-- ─────────────────────────────────────────────────────────────
+--  8. Video watch tracking (v5.0)
+--     Written by the external /watch page via an insert-only anon key
+--     scoped to this table only. Consumed by our own background job
+--     (service_role, bypasses RLS) which then advances progress.
+-- ─────────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS video_watches (
+    id           BIGSERIAL PRIMARY KEY,
+    token        TEXT        NOT NULL,
+    day_number   INTEGER     NOT NULL,
+    discord_id   BIGINT      NOT NULL,
+    processed    BOOLEAN     NOT NULL DEFAULT FALSE,
+    watched_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_video_watches_token      ON video_watches(token);
+CREATE INDEX IF NOT EXISTS idx_video_watches_discord_id ON video_watches(discord_id);
+CREATE INDEX IF NOT EXISTS idx_video_watches_processed  ON video_watches(processed);
+
+ALTER TABLE video_watches ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "anon can insert video watches" ON video_watches;
+CREATE POLICY "anon can insert video watches"
+    ON video_watches
+    FOR INSERT
+    TO anon
+    WITH CHECK (true);
+-- No SELECT/UPDATE/DELETE policy for anon: the public key can insert only.
+
+-- ─────────────────────────────────────────────────────────────
+--  9. Training video URLs (v6.0)
+--     Read only by the bot's own service_role key
+--     (see database/training_videos.py). Not exposed to the public key.
+-- ─────────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS training_videos (
+    day_number INTEGER     PRIMARY KEY,
+    url        TEXT        NOT NULL,
+    caption    TEXT,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+ALTER TABLE training_videos DISABLE ROW LEVEL SECURITY;
+GRANT ALL PRIVILEGES ON training_videos TO service_role;
+
+-- Seed placeholders — replace url/caption with the real hosted links,
+-- or update the rows directly in Supabase later.
+INSERT INTO training_videos (day_number, url, caption) VALUES
+    (1, 'https://cdn.example.com/day1.mp4', 'Today''s lesson: luck is a skill you can train. Watch the video, then lock in the mantra — I am lucky. I am the luck.'),
+    (2, 'https://cdn.example.com/day2.mp4', NULL),
+    (3, 'https://cdn.example.com/day3.mp4', NULL),
+    (4, 'https://cdn.example.com/day4.mp4', NULL),
+    (5, 'https://cdn.example.com/day5.mp4', NULL),
+    (6, 'https://cdn.example.com/day6.mp4', NULL),
+    (7, 'https://cdn.example.com/day7.mp4', NULL),
+    (8, 'https://cdn.example.com/day8.mp4', NULL)
+ON CONFLICT (day_number) DO NOTHING;

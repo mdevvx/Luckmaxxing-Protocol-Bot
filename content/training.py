@@ -9,6 +9,8 @@ Day 1 -> First real lesson (sent right after intro, same session)
 Days 2-8 -> Delivered automatically every 24 hours.
 """
 
+from database.training_videos import get_training_video
+
 INTRO = [
     (
         "Intern",
@@ -317,19 +319,10 @@ _TITLE_MAP = {
     8: "Day 8 - Integration",
 }
 
-# Days listed here render as a Components V2 video container instead of the
-# stepped text dialogue above. NOTE: this Discord CDN attachment URL is
-# signed and expires (~2026-07-24) — swap it for a permanently hosted link
-# or a re-uploaded attachment before relying on this outside of preview.
-_VIDEO_MAP = {
-    1: {
-        "url": "https://cdn.discordapp.com/attachments/1525119417732567070/1525119577506185287/day1.mp4?ex=6a5239ca&is=6a50e84a&hm=cfb6e3791cebf9b1f6802bd0ce9a78ecc50c05f9b5cf6cdcdd03dc574843f19d&",
-        "caption": (
-            "Today's lesson: luck is a skill you can train. Watch the video, "
-            "then lock in the mantra — *I am lucky. I am the luck.*"
-        ),
-    },
-}
+# Days with a video render as a link out to the tracked /watch page instead
+# of the stepped text dialogue above. Video URLs/captions now live in the
+# `training_videos` Supabase table (see database/training_videos.py) instead
+# of being hardcoded here, so they can be updated without a redeploy.
 
 
 def get_content(day: int):
@@ -344,4 +337,4 @@ def get_day_title(day: int) -> str:
 
 def get_day_video(day: int) -> dict | None:
     """Return the {"url", "caption"} mapping for the given day's video, if it has one."""
-    return _VIDEO_MAP.get(day)
+    return get_training_video(day)

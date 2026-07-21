@@ -11,6 +11,9 @@ DISCORD_TOKEN: str = os.getenv("DISCORD_BOT_TOKEN", "")
 SUPABASE_URL: str = os.getenv("SUPABASE_URL", "")
 SUPABASE_KEY: str = os.getenv("SUPABASE_KEY", "")
 
+# ── Video watch tracking ─────────────────────────────────────────
+WATCH_BASE_URL: str = os.getenv("WATCH_BASE_URL", "https://hypergamble.bet/watch")
+
 # ── Bot settings ─────────────────────────────────────────────────
 TOTAL_DAYS: int = 8
 PROTOCOL_CHANNEL_NAME: str = "luckmaxxing-protocol"

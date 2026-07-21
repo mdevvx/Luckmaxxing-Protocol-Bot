@@ -35,8 +35,8 @@ class AdminCog(commands.Cog):
         Return True if the bot is enabled for this guild.
         Sends an ephemeral error and returns False otherwise.
 
-        /toggle and /sync intentionally skip this check so admins can
-        always re-enable the bot or sync commands regardless of state.
+        /toggle intentionally skips this check so admins can
+        always re-enable the bot regardless of state.
         /configure also skips it so admins can finish setup before enabling.
         """
         if not await self.db.is_bot_enabled(interaction.guild.id):
@@ -79,10 +79,10 @@ class AdminCog(commands.Cog):
 
     @app_commands.command(
         name="configure",
-        description="Set training category, enrollment role, completion role, and log channel (Admin only)",
+        description="Set threads channel, enrollment role, completion role, and log channel (Admin only)",
     )
     @app_commands.describe(
-        category="Category where private training channels will be created",
+        threads_channel="Channel under which private training threads will be created",
         role="Role assigned to users when they enroll",
         completion_role="Role assigned to users when they finish all training days",
         log_channel="Channel where the bot posts activity logs",
@@ -91,16 +91,21 @@ class AdminCog(commands.Cog):
     async def configure(
         self,
         interaction: discord.Interaction,
-        category: Optional[discord.CategoryChannel] = None,
+        threads_channel: Optional[discord.TextChannel] = None,
         role: Optional[discord.Role] = None,
         completion_role: Optional[discord.Role] = None,
         log_channel: Optional[discord.TextChannel] = None,
     ):
-        """Persist category, roles, and/or log channel for this guild."""
+        """Persist threads channel, roles, and/or log channel for this guild."""
         # /configure is allowed even when disabled so admins can finish setup first
-        if category is None and role is None and completion_role is None and log_channel is None:
+        if (
+            threads_channel is None
+            and role is None
+            and completion_role is None
+            and log_channel is None
+        ):
             await interaction.response.send_message(
-                "Provide at least one option: `category`, `role`, `completion_role`, or `log_channel`.",
+                "Provide at least one option: `threads_channel`, `role`, `completion_role`, or `log_channel`.",
                 ephemeral=True,
             )
             return
@@ -109,7 +114,7 @@ class AdminCog(commands.Cog):
 
         success = await self.db.set_guild_config(
             interaction.guild.id,
-            category_id=category.id if category else None,
+            threads_channel_id=threads_channel.id if threads_channel else None,
             role_id=role.id if role else None,
             completion_role_id=completion_role.id if completion_role else None,
             log_channel_id=log_channel.id if log_channel else None,
@@ -122,8 +127,8 @@ class AdminCog(commands.Cog):
             return
 
         lines = []
-        if category:
-            lines.append(f"**Training category:** {category.name}")
+        if threads_channel:
+            lines.append(f"**Threads channel:** {threads_channel.mention}")
         if role:
             lines.append(f"**Enrollment role:** {role.mention}")
         if completion_role:
@@ -144,7 +149,7 @@ class AdminCog(commands.Cog):
         await interaction.followup.send(embed=embed, ephemeral=True)
         logger.info(
             f"Guild {interaction.guild.id} configured — "
-            f"category={category.id if category else None}, "
+            f"threads_channel={threads_channel.id if threads_channel else None}, "
             f"role={role.id if role else None}, "
             f"completion_role={completion_role.id if completion_role else None}, "
             f"log_channel={log_channel.id if log_channel else None}"
@@ -275,16 +280,23 @@ class AdminCog(commands.Cog):
             )
             return
 
-        # Optionally delete the training channel
+        # Optionally delete the training thread
         if channel_id:
-            channel = interaction.guild.get_channel(channel_id)
-            if channel:
+            thread = interaction.guild.get_thread(
+                channel_id
+            ) or interaction.guild.get_channel(channel_id)
+            if not thread:
                 try:
-                    await channel.delete(
+                    thread = await self.bot.fetch_channel(channel_id)
+                except Exception:
+                    thread = None
+            if thread:
+                try:
+                    await thread.delete(
                         reason=f"Unenrolled by admin {interaction.user}"
                     )
                 except discord.Forbidden:
-                    logger.warning(f"Could not delete channel {channel_id}")
+                    logger.warning(f"Could not delete thread {channel_id}")
 
         await self._remove_protocol_roles(
             interaction.guild,
@@ -343,14 +355,14 @@ class AdminCog(commands.Cog):
         settings = await self.db.get_guild_settings(interaction.guild.id)
 
         bot_status = "Enabled" if settings.get("bot_enabled", True) else "Disabled"
-        category_id = settings.get("category_id")
+        threads_channel_id = settings.get("threads_channel_id")
         role_id = settings.get("role_id")
         completion_role_id = settings.get("completion_role_id")
         log_channel_id = settings.get("log_channel_id")
 
-        category_label = (
-            interaction.guild.get_channel(category_id).name
-            if category_id and interaction.guild.get_channel(category_id)
+        threads_channel_label = (
+            interaction.guild.get_channel(threads_channel_id).mention
+            if threads_channel_id and interaction.guild.get_channel(threads_channel_id)
             else "Not set"
         )
         role_label = (
@@ -375,49 +387,75 @@ class AdminCog(commands.Cog):
             name="Latency", value=f"{round(self.bot.latency * 1000)}ms", inline=True
         )
         embed.add_field(name="Servers", value=len(self.bot.guilds), inline=True)
-        embed.add_field(name="Training Category", value=category_label, inline=True)
+        embed.add_field(name="Threads Channel", value=threads_channel_label, inline=True)
         embed.add_field(name="Enrollment Role", value=role_label, inline=True)
-        embed.add_field(name="Completion Role", value=completion_role_label, inline=True)
+        embed.add_field(
+            name="Completion Role", value=completion_role_label, inline=True
+        )
         embed.add_field(name="Log Channel", value=log_label, inline=True)
         embed.set_footer(text=f"Bot ID: {self.bot.user.id}")
         await interaction.followup.send(embed=embed)
 
     # ──────────────────────────────────────────
-    #  /sync  (owner only)
+    #  $sync  (text command — registers commands to this guild only)
     # ──────────────────────────────────────────
 
-    @app_commands.command(
-        name="sync",
-        description="Sync slash commands globally (Bot Owner only)",
-    )
-    @app_commands.default_permissions(administrator=True)
-    async def sync_commands(self, interaction: discord.Interaction):
-        app_info = await self.bot.application_info()
-        if interaction.user.id != app_info.owner.id:
-            await interaction.response.send_message(
-                "Only the bot owner can use this command.", ephemeral=True
-            )
+    @commands.command(name="sync")
+    async def sync_guild_commands(self, ctx: commands.Context):
+        """Register slash commands to the current guild. Reacts ⏳ while working, ✅ when done."""
+        if ctx.guild is None:
             return
 
-        await interaction.response.defer()
-        try:
-            global_cmds = await self.bot.tree.sync()
-            guild_cmds = await self.bot.tree.sync(guild=interaction.guild)
+        app_info = await self.bot.application_info()
+        is_owner = ctx.author.id == app_info.owner.id
+        is_admin = ctx.author.guild_permissions.administrator
+        if not (is_owner or is_admin):
+            await ctx.reply("Only the bot owner or a server admin can use this command.")
+            return
 
-            embed = discord.Embed(title="Commands Synced", color=config.EMBED_COLOR)
-            embed.add_field(
-                name="Global", value=f"{len(global_cmds)} commands", inline=True
-            )
-            embed.add_field(
-                name="This Server", value=f"{len(guild_cmds)} commands", inline=True
-            )
-            await interaction.followup.send(embed=embed)
+        try:
+            await ctx.message.add_reaction("⏳")
+        except discord.Forbidden:
+            pass
+
+        try:
+            # Register to this guild first (copy_global_to reads from the
+            # in-memory global command list, so it must run before we clear it).
+            self.bot.tree.copy_global_to(guild=ctx.guild)
+            guild_cmds = await self.bot.tree.sync(guild=ctx.guild)
+
+            # Then wipe any stale globally-synced commands so they stop
+            # showing up as duplicates alongside the guild-scoped copies.
+            self.bot.tree.clear_commands(guild=None)
+            await self.bot.tree.sync()
+
             logger.info(
-                f"Commands synced: {len(global_cmds)} global, {len(guild_cmds)} guild"
+                f"$sync: registered {len(guild_cmds)} commands to guild {ctx.guild.id}"
             )
         except Exception as exc:
-            logger.error(f"sync_commands: {exc}")
-            await interaction.followup.send(f"Sync failed: {exc}")
+            logger.error(f"sync_guild_commands: {exc}")
+            try:
+                await ctx.message.remove_reaction("⏳", self.bot.user)
+            except discord.Forbidden:
+                pass
+            try:
+                await ctx.message.add_reaction("❌")
+            except discord.Forbidden:
+                pass
+            await ctx.reply(f"Sync failed: {exc}")
+            return
+
+        try:
+            await ctx.message.remove_reaction("⏳", self.bot.user)
+        except discord.Forbidden:
+            pass
+        try:
+            await ctx.message.add_reaction("✅")
+        except discord.Forbidden:
+            pass
+        await ctx.reply(
+            f"✅ Synced **{len(guild_cmds)}** command(s) to **{ctx.guild.name}**."
+        )
 
 
 async def setup(bot: commands.Bot):

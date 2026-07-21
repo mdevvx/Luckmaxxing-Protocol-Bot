@@ -45,7 +45,7 @@ class BotLogger:
         guild: discord.Guild,
         user: Union[discord.Member, discord.User],
         enrollment_id: str,
-        channel: discord.TextChannel,
+        channel: discord.Thread,
     ) -> None:
         embed = discord.Embed(
             title="User Enrolled",
@@ -54,7 +54,7 @@ class BotLogger:
         )
         embed.add_field(name="User", value=f"{user.mention} (`{user.id}`)", inline=True)
         embed.add_field(name="Enrollment ID", value=f"`{enrollment_id}`", inline=True)
-        embed.add_field(name="Training Channel", value=channel.mention, inline=True)
+        embed.add_field(name="Training Thread", value=channel.mention, inline=True)
         embed.set_footer(text=self._now())
         await self._send(guild, embed)
 

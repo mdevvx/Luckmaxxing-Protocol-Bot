@@ -6,7 +6,14 @@
       "Read(//c/Users/Lenovo/AppData/Local/Programs/Python/Python313/Lib/site-packages/**)",
       "Bash(python -m py_compile content/training.py views/video_day.py cogs/protocol.py)",
       "Bash(python -m py_compile content/training.py views/dialogue.py views/video_day.py cogs/protocol.py)",
-      "Bash(python -m py_compile views/enrollment.py views/graduation.py views/text_card.py views/__init__.py cogs/protocol.py)"
+      "Bash(python -m py_compile views/enrollment.py views/graduation.py views/text_card.py views/__init__.py cogs/protocol.py)",
+      "WebFetch(domain:support.discord.com)",
+      "Bash(python3 -c ' *)",
+      "Bash(xargs -I{} echo {})",
+      "Bash(python -m py_compile bot.py cogs/protocol.py cogs/admin.py views/graduation.py views/dm_ritual.py views/dialogue.py views/video_day.py views/enrollment.py database/base.py database/supabase_db.py utils/bot_logger.py)",
+      "Bash(python -m py_compile cogs/admin.py)",
+      "Bash(python -m py_compile bot.py cogs/admin.py)",
+      "Bash(python -c \"import cogs.admin; print\\('OK'\\)\")"
     ]
   }
 }

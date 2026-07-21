@@ -704,6 +704,16 @@ class SupabaseDatabase(DatabaseBase):
             logger.error(f"mark_enrollment_used: {exc}")
             return False
 
+    async def mark_dm_ack(self, user_id: int, guild_id: int) -> bool:
+        try:
+            self._get_client().table("enrollments").update(
+                {"dm_ack": True}
+            ).eq("user_id", user_id).eq("guild_id", guild_id).execute()
+            return True
+        except Exception as exc:
+            logger.error(f"mark_dm_ack: {exc}")
+            return False
+
     # ─────────────────────────────────────────────
     #  Progress Tracking
     # ─────────────────────────────────────────────
@@ -999,7 +1009,7 @@ class SupabaseDatabase(DatabaseBase):
             defaults: Dict[str, Any] = {
                 "guild_id": guild_id,
                 "bot_enabled": True,
-                "category_id": None,
+                "threads_channel_id": None,
                 "role_id": None,
                 "completion_role_id": None,
                 "created_at": self._now(),
@@ -1032,7 +1042,7 @@ class SupabaseDatabase(DatabaseBase):
     async def set_guild_config(
         self,
         guild_id: int,
-        category_id: Optional[int] = None,
+        threads_channel_id: Optional[int] = None,
         role_id: Optional[int] = None,
         completion_role_id: Optional[int] = None,
         log_channel_id: Optional[int] = None,
@@ -1042,8 +1052,8 @@ class SupabaseDatabase(DatabaseBase):
                 "guild_id": guild_id,
                 "updated_at": self._now(),
             }
-            if category_id is not None:
-                payload["category_id"] = category_id
+            if threads_channel_id is not None:
+                payload["threads_channel_id"] = threads_channel_id
             if role_id is not None:
                 payload["role_id"] = role_id
             if completion_role_id is not None:

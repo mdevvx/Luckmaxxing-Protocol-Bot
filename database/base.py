@@ -40,6 +40,11 @@ class DatabaseBase(ABC):
         pass
 
     @abstractmethod
+    async def mark_dm_ack(self, user_id: int, guild_id: int) -> bool:
+        """Record that the user completed the 'report to Papi' DM ritual."""
+        pass
+
+    @abstractmethod
     async def get_user_progress(
         self, user_id: int, guild_id: int
     ) -> Optional[Dict[str, Any]]:
@@ -91,7 +96,7 @@ class DatabaseBase(ABC):
     async def set_guild_config(
         self,
         guild_id: int,
-        category_id: Optional[int] = None,
+        threads_channel_id: Optional[int] = None,
         role_id: Optional[int] = None,
         completion_role_id: Optional[int] = None,
         log_channel_id: Optional[int] = None,

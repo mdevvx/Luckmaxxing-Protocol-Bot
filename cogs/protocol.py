@@ -12,7 +12,9 @@ from database import get_database
 from database.base import DatabaseBase
 from utils.bot_logger import BotLogger
 from utils.logger import logger
+from utils.watch_link import build_watch_url
 from views.dialogue import DialogueView
+from views.dm_ritual import DMRitualView
 from views.enrollment import EnrollmentView
 from views.graduation import GraduationActionsView
 from views.text_card import TextCardView
@@ -31,9 +33,8 @@ _NOTIFY_HOURS = {9, 21}  # 9 AM and 9 PM
 # How many minutes either side of the target hour counts as "in window"
 _WINDOW_MINUTES = 15
 
-# Seconds after delivery before each inactivity alert fires
-_ALERT1_SECONDS = 8 * 3600   # first reminder at 8 h
-_ALERT2_SECONDS = 16 * 3600  # final reminder at 16 h (also disables the button)
+# Seconds after delivery before the single inactivity reminder fires
+_ALERT_SECONDS = 24 * 3600  # one reminder, ~24h after delivery
 
 
 # ──────────────────────────────────────────────────────────────────
@@ -59,35 +60,39 @@ def _in_notify_window() -> bool:
 
 
 def _onboarding_view(user: discord.Member) -> TextCardView:
-    """Pinned container posted at the top of every private training channel."""
+    """Pinned container posted at the top of every private training thread."""
     return TextCardView(
-        "Welcome to your Luckmaxxing Training Channel",
+        "Welcome to your Luckmaxxing Training Thread",
         f"Hey {user.mention}, this is your private space for the 8-day program.\n\n"
         "**How it works**\n"
         "• Each day's lesson appears here as an interactive dialogue or video.\n"
         "• Read the **Intern's** message, then click the button to speak your response.\n"
         "• Complete the dialogue to finish the day.\n"
-        "• Days 2–8 are posted automatically every 24 hours.\n\n"
+        "• A new day unlocks automatically every 24 hours.\n\n"
+        "**This thread is your line** — notifications, offers, and everything else lands "
+        "here. Don't close it.\n\n"
         "**Daily mantra** — repeat before sunrise and before any high-risk activity:\n"
         "> *I am lucky. I am the luck.*\n\n"
-        "**Warning:** If you don't complete a day's training, you'll receive two reminders. "
-        "After the second reminder the session closes and that day's content will reappear the next day.\n\n"
+        "**Warning:** If you don't complete a day's training, you'll get one reminder. "
+        "If it still goes unanswered, that day's content reappears the next cycle.\n\n"
         "Gorillions await you.",
-        "-# Only you and the bot can see this channel.",
+        "-# Only you and the bot can see this thread.",
     )
 
 
 async def _get_training_channel(
-    bot: commands.Bot, channel_id: int
-) -> discord.TextChannel | None:
-    """Resolve a channel ID to a TextChannel, returning None on any failure."""
+    bot: commands.Bot, channel_id: int, guild: discord.Guild | None = None
+) -> discord.Thread | None:
+    """Resolve a thread ID to a Thread, returning None on any failure."""
     try:
         channel = bot.get_channel(channel_id)
+        if channel is None and guild is not None:
+            channel = guild.get_thread(channel_id)
         if channel is None:
             channel = await bot.fetch_channel(channel_id)
         return channel  # type: ignore[return-value]
     except Exception as exc:
-        logger.warning(f"Could not fetch channel {channel_id}: {exc}")
+        logger.warning(f"Could not fetch thread {channel_id}: {exc}")
         return None
 
 
@@ -119,8 +124,9 @@ class ProtocolCog(commands.Cog):
 
     async def cog_load(self):
         await self.db.initialize()
-        # Re-register the persistent enrollment view so buttons survive restarts
+        # Re-register persistent views so buttons survive restarts
         self.bot.add_view(EnrollmentView(on_enroll=self.handle_enrollment))
+        self.bot.add_view(DMRitualView(on_confirm=self.handle_dm_ritual))
         logger.info("Protocol cog loaded")
 
     async def cog_unload(self):
@@ -216,10 +222,23 @@ class ProtocolCog(commands.Cog):
             )
             return
 
-        # ── Guild config (category + role) ────────────────────────
+        # ── Guild config (threads channel + role) ─────────────────
         settings = await self.db.get_guild_settings(guild_id)
-        category_id: int | None = settings.get("category_id")
+        threads_channel_id: int | None = settings.get("threads_channel_id")
         role_id: int | None = settings.get("role_id")
+
+        # ── Resolve the parent channel threads are created under ──
+        parent_channel = (
+            guild.get_channel(threads_channel_id) if threads_channel_id else None
+        )
+        if not isinstance(parent_channel, discord.TextChannel):
+            await interaction.followup.send(
+                "This server isn't fully configured yet — no threads channel is set. "
+                "Ask an admin to run `/configure threads_channel:<channel>`.",
+                ephemeral=True,
+            )
+            await self.db.unenroll_user(user.id, guild_id)
+            return
 
         # ── Assign enrollment role ────────────────────────────────
         role_assigned = False
@@ -237,80 +256,75 @@ class ProtocolCog(commands.Cog):
                     f"Enrollment role {role_id} not found in guild {guild_id}"
                 )
 
-        # ── Create private training channel ───────────────────────
-        category = guild.get_channel(category_id) if category_id else None
+        # ── Create private training thread ─────────────────────────
         safe_name = user.name.lower().replace(" ", "-")[:20]
         channel_name = f"luckmaxx-{safe_name}"
 
-        overwrites = {
-            guild.default_role: discord.PermissionOverwrite(read_messages=False),
-            user: discord.PermissionOverwrite(
-                read_messages=True,
-                send_messages=False,  # User only interacts via buttons
-                read_message_history=True,
-            ),
-            guild.me: discord.PermissionOverwrite(
-                read_messages=True,
-                send_messages=True,
-                manage_messages=True,
-                embed_links=True,
-            ),
-        }
-
         try:
-            channel: discord.TextChannel = await guild.create_text_channel(
-                channel_name,
-                category=category,  # type: ignore[arg-type]
-                overwrites=overwrites,
-                topic=f"Luckmaxxing training for {user.display_name}",
+            channel: discord.Thread = await parent_channel.create_thread(
+                name=channel_name,
+                type=discord.ChannelType.private_thread,
+                invitable=False,
+                auto_archive_duration=10080,  # 7 days; daily bot activity keeps it alive
                 reason="Luckmaxxing Protocol enrollment",
             )
+            await channel.add_user(user)
         except discord.Forbidden:
             await interaction.followup.send(
-                "I don't have permission to create channels. "
+                "I don't have permission to create threads. "
                 "Ask an admin to check my permissions.",
                 ephemeral=True,
             )
             await self.db.unenroll_user(user.id, guild_id)
             if role_assigned:
                 await self._remove_onboarding_role(
-                    guild, user.id, reason="Enrollment rollback after channel failure"
+                    guild, user.id, reason="Enrollment rollback after thread failure"
                 )
             return
         except Exception as exc:
-            logger.error(f"Channel creation failed for {user.id}: {exc}")
+            logger.error(f"Thread creation failed for {user.id}: {exc}")
             await interaction.followup.send(
-                "Failed to create your training channel. Please try again.",
+                "Failed to create your training thread. Please try again.",
                 ephemeral=True,
             )
             await self.db.unenroll_user(user.id, guild_id)
             if role_assigned:
                 await self._remove_onboarding_role(
-                    guild, user.id, reason="Enrollment rollback after channel failure"
+                    guild, user.id, reason="Enrollment rollback after thread failure"
                 )
             return
 
-        # ── Persist channel ID ────────────────────────────────────
+        # ── Persist thread ID ──────────────────────────────────────
         await self.db.save_channel_id(user.id, guild_id, channel.id)
 
-        # ── Post pinned onboarding embed ──────────────────────────
+        # ── Post pinned onboarding embed + DM ritual ──────────────
         try:
             onboarding_msg = await channel.send(view=_onboarding_view(user))
             await onboarding_msg.pin()
+            await channel.send(view=DMRitualView(on_confirm=self.handle_dm_ritual))
         except Exception as exc:
-            logger.warning(f"Could not pin onboarding embed: {exc}")
+            logger.warning(f"Could not post onboarding messages: {exc}")
 
         # ── Start Intro + Day 1 ───────────────────────────────────
         await self._send_intro_and_day1(user, guild_id, channel)
 
         # ── Confirm to the user ───────────────────────────────────
         await interaction.followup.send(
-            f"Enrollment successful! Your private training channel: {channel.mention}",
+            f"Enrollment successful! Your private training thread: {channel.mention}",
             ephemeral=True,
         )
         await self.bot_log.enrolled(guild, user, enrollment_id, channel)
         logger.info(
-            f"User {user.id} enrolled — channel {channel.id} in guild {guild_id}"
+            f"User {user.id} enrolled — thread {channel.id} in guild {guild_id}"
+        )
+
+    async def handle_dm_ritual(self, interaction: discord.Interaction) -> None:
+        """Called by DMRitualView after it successfully DMs the user."""
+        if interaction.guild is None:
+            return
+        await self.db.mark_dm_ack(interaction.user.id, interaction.guild.id)
+        logger.info(
+            f"User {interaction.user.id} completed DM ritual in guild {interaction.guild.id}"
         )
 
     # ──────────────────────────────────────────
@@ -321,7 +335,7 @@ class ProtocolCog(commands.Cog):
         self,
         user: discord.Member | discord.User,
         guild_id: int,
-        channel: discord.TextChannel,
+        channel: discord.Thread,
     ):
         """Send the Intro dialogue; on completion, immediately send Day 1."""
 
@@ -352,7 +366,7 @@ class ProtocolCog(commands.Cog):
         user: discord.Member | discord.User,
         guild_id: int,
         day: int,
-        channel: discord.TextChannel,
+        channel: discord.Thread,
     ):
         """
         Post day `day` dialogue to `channel`.
@@ -414,7 +428,7 @@ class ProtocolCog(commands.Cog):
                                 logger.warning(
                                     f"Missing permission to assign completion role {completion_role_id}"
                                 )
-                grad_view = GraduationActionsView(self.db, user)
+                grad_view = GraduationActionsView(user)
                 await channel.send(view=grad_view)
                 await self.bot_log.training_complete(guild, user)
                 logger.info(f"User {user.id} completed training in guild {guild_id}")
@@ -427,12 +441,11 @@ class ProtocolCog(commands.Cog):
 
         video = get_day_video(day)
         if video:
+            watch_url = build_watch_url(video["url"], day, user.id)
             video_view = VideoDayView(
                 get_day_title(day),
-                video["url"],
+                watch_url,
                 caption=video.get("caption"),
-                on_complete=on_day_done,
-                user_id=user.id,
             )
             await self._post_container(channel, video_view)
         else:
@@ -467,16 +480,17 @@ class ProtocolCog(commands.Cog):
             logger.warning(f"No channel_id for user {user.id} in guild {guild_id}")
             return
 
-        channel = await _get_training_channel(self.bot, channel_id)
+        guild = self.bot.get_guild(guild_id)
+        channel = await _get_training_channel(self.bot, channel_id, guild)
         if channel is None:
-            logger.warning(f"Channel {channel_id} not found — skipping user {user.id}")
+            logger.warning(f"Thread {channel_id} not found — skipping user {user.id}")
             return
 
         await self._send_day(user, guild_id, day, channel)
 
     @staticmethod
     async def _post_container(
-        channel: discord.TextChannel,
+        channel: discord.Thread,
         view: DialogueView | VideoDayView,
     ):
         """Send a day's lesson as a single Components V2 container."""
@@ -488,7 +502,7 @@ class ProtocolCog(commands.Cog):
     # ──────────────────────────────────────────
 
     async def _disable_active_dialogue_button(
-        self, channel: discord.TextChannel
+        self, channel: discord.Thread
     ) -> None:
         """
         Find the most recent bot message in the channel that has an enabled button
@@ -530,8 +544,8 @@ class ProtocolCog(commands.Cog):
                 f"Could not disable dialogue button in channel {channel.id}: {exc}"
             )
 
-    async def _send_alert(self, row: dict, alert_number: int) -> None:
-        """Send alert 1 or alert 2 for a user who hasn't responded to their day's content."""
+    async def _send_alert(self, row: dict) -> None:
+        """Send the single reminder for a user who hasn't responded to their day's content."""
         user_id: int = row["user_id"]
         guild_id: int = row["guild_id"]
         day: int = row["current_day"]
@@ -541,7 +555,7 @@ class ProtocolCog(commands.Cog):
         if not guild or not channel_id:
             return
 
-        channel = await _get_training_channel(self.bot, channel_id)
+        channel = await _get_training_channel(self.bot, channel_id, guild)
         if channel is None:
             return
 
@@ -550,39 +564,22 @@ class ProtocolCog(commands.Cog):
             f"Day {day} training is waiting for you. "
             "The dialogue is above — pick up where you left off."
         )
-        logger.info(f"Sent alert {alert_number} for user {user_id} day {day}")
-        await self.db.update_alert_count(user_id, guild_id, alert_number)
+        logger.info(f"Sent reminder for user {user_id} day {day}")
+        await self.db.update_alert_count(user_id, guild_id, 1)
 
     async def _send_daily_alerts(self) -> None:
         """
-        Fire up to two identical reminders per 24-hour cycle.
-
-        Alert 1 fires 8 h after content delivery if the user hasn't responded.
-        Alert 2 fires 16 h after content delivery (same message, button stays active).
-        Both alerts are skipped once the user clicks any button (last_button_click resets).
+        Fire a single reminder ~24h after content delivery if the user hasn't
+        responded. Skipped once the user clicks any button (last_button_click resets).
         """
-        # Alert 1
         for row in await self.db.get_users_needing_alert(
-            min_seconds=_ALERT1_SECONDS, alert_count=0
+            min_seconds=_ALERT_SECONDS, alert_count=0
         ):
             try:
-                await self._send_alert(row, alert_number=1)
+                await self._send_alert(row)
             except Exception as exc:
                 logger.error(
-                    f"Error sending alert 1 to user {row.get('user_id')}: {exc}",
-                    exc_info=True,
-                )
-            await asyncio.sleep(0.5)
-
-        # Alert 2
-        for row in await self.db.get_users_needing_alert(
-            min_seconds=_ALERT2_SECONDS, alert_count=1
-        ):
-            try:
-                await self._send_alert(row, alert_number=2)
-            except Exception as exc:
-                logger.error(
-                    f"Error sending alert 2 to user {row.get('user_id')}: {exc}",
+                    f"Error sending reminder to user {row.get('user_id')}: {exc}",
                     exc_info=True,
                 )
             await asyncio.sleep(0.5)
@@ -597,7 +594,7 @@ class ProtocolCog(commands.Cog):
         Every 30 minutes:
         1. For users whose 24-hour window has elapsed: if they responded, deliver the
            next day's content; if not, reset the alert timer without re-posting.
-        2. Send up to two identical reminder alerts per cycle until the user responds.
+        2. Send a single reminder per cycle to users who haven't responded.
         """
         await self._deliver_daily_content()
         await self._send_daily_alerts()
@@ -656,7 +653,9 @@ class ProtocolCog(commands.Cog):
                 # Disable any leftover active button from the previous cycle before
                 # posting fresh content so only one dialogue is active at a time.
                 if progress and progress.get("channel_id"):
-                    ch = await _get_training_channel(self.bot, progress["channel_id"])
+                    ch = await _get_training_channel(
+                        self.bot, progress["channel_id"], self.bot.get_guild(guild_id)
+                    )
                     if ch:
                         await self._disable_active_dialogue_button(ch)
 
@@ -700,14 +699,14 @@ class ProtocolCog(commands.Cog):
 
     async def _check_configured(self, interaction: discord.Interaction) -> bool:
         settings = await self.db.get_guild_settings(interaction.guild.id)
-        category_id = settings.get("category_id")
+        threads_channel_id = settings.get("threads_channel_id")
         role_id = settings.get("role_id")
         completion_role_id = settings.get("completion_role_id")
 
         missing = []
-        if not category_id:
+        if not threads_channel_id:
             missing.append(
-                "**Training category** — where private channels will be created"
+                "**Threads channel** — where private training threads will be created"
             )
         if not role_id:
             missing.append("**Enrollment role** — assigned to users when they enroll")
@@ -723,7 +722,7 @@ class ProtocolCog(commands.Cog):
                     "Before running `/setup` you must configure this server.\n\n"
                     "**Missing:**\n" + "\n".join(f"• {m}" for m in missing) + "\n\n"
                     "**Run this command first:**\n"
-                    "```\n/configure role:<role> completion_role:<role> category:<category>\n```\n"
+                    "```\n/configure role:<role> completion_role:<role> threads_channel:<channel>\n```\n"
                     "All options can be set together or one at a time."
                 ),
                 color=config.EMBED_COLOR,
