@@ -100,6 +100,7 @@ class DatabaseBase(ABC):
         role_id: Optional[int] = None,
         completion_role_id: Optional[int] = None,
         log_channel_id: Optional[int] = None,
+        team_role_id: Optional[int] = None,
     ) -> bool:
         pass
 
@@ -121,4 +122,35 @@ class DatabaseBase(ABC):
         self, min_seconds: int, alert_count: int
     ) -> List[Dict[str, Any]]:
         """Return enrolled users who have had content for min_seconds but not responded."""
+        pass
+
+    @abstractmethod
+    async def record_watch_token(
+        self, guild_id: int, discord_id: int, day_number: int, token: str
+    ) -> bool:
+        """Persist a token we issued for a watch link, so it can later be
+        validated against what the public /watch page echoes back."""
+        pass
+
+    @abstractmethod
+    async def get_issued_watch_token(self, token: str) -> Optional[Dict[str, Any]]:
+        """Look up the record created when a watch link was issued, to
+        validate a video_watches submission against forgery."""
+        pass
+
+    @abstractmethod
+    async def get_pending_video_watches(self, limit: int = 25) -> List[Dict[str, Any]]:
+        """Return unprocessed video_watches rows, oldest first."""
+        pass
+
+    @abstractmethod
+    async def mark_video_watch_processed(self, watch_id: int) -> bool:
+        pass
+
+    @abstractmethod
+    async def has_watched_video(self, discord_id: int, day_number: int) -> bool:
+        """True if any video_watches row exists for this user/day, regardless
+        of whether the watch job has processed it yet. Used by the reminder
+        system to detect engagement on video days, since their link-out
+        button never fires an interaction we can see."""
         pass

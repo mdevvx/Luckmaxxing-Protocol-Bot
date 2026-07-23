@@ -70,8 +70,9 @@ CREATE TABLE IF NOT EXISTS enrollment_ids (
 ALTER TABLE enrollments    ADD COLUMN IF NOT EXISTS channel_id       BIGINT;
 ALTER TABLE enrollments    ADD COLUMN IF NOT EXISTS enrollment_id    TEXT NOT NULL DEFAULT '';
 ALTER TABLE enrollments    ADD COLUMN IF NOT EXISTS enrollment_used  BOOLEAN NOT NULL DEFAULT FALSE;
-ALTER TABLE guild_settings ADD COLUMN IF NOT EXISTS category_id     BIGINT;
-ALTER TABLE guild_settings ADD COLUMN IF NOT EXISTS role_id         BIGINT;
+ALTER TABLE guild_settings ADD COLUMN IF NOT EXISTS category_id        BIGINT;
+ALTER TABLE guild_settings ADD COLUMN IF NOT EXISTS role_id            BIGINT;
+ALTER TABLE guild_settings ADD COLUMN IF NOT EXISTS completion_role_id BIGINT;
 
 -- ─────────────────────────────────────────────────────────────
 --  3. Indexes
@@ -125,6 +126,8 @@ BEGIN
 END $$;
 
 ALTER TABLE enrollments ADD COLUMN IF NOT EXISTS last_button_click TIMESTAMPTZ;
+ALTER TABLE enrollments ADD COLUMN IF NOT EXISTS last_content_delivered_at TIMESTAMPTZ;
+ALTER TABLE enrollments ADD COLUMN IF NOT EXISTS daily_alert_count         INTEGER NOT NULL DEFAULT 0;
 
 -- ─────────────────────────────────────────────────────────────
 --  7. Thread-based flow (v4.0)
@@ -151,7 +154,7 @@ CREATE TABLE IF NOT EXISTS video_watches (
     created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-CREATE INDEX IF NOT EXISTS idx_video_watches_token      ON video_watches(token);
+CREATE UNIQUE INDEX IF NOT EXISTS ux_video_watches_token ON video_watches(token);
 CREATE INDEX IF NOT EXISTS idx_video_watches_discord_id ON video_watches(discord_id);
 CREATE INDEX IF NOT EXISTS idx_video_watches_processed  ON video_watches(processed);
 
@@ -166,7 +169,30 @@ CREATE POLICY "anon can insert video watches"
 -- No SELECT/UPDATE/DELETE policy for anon: the public key can insert only.
 
 -- ─────────────────────────────────────────────────────────────
---  9. Training video URLs (v6.0)
+--  9. Issued watch tokens (v5.1)
+--     Our own record of every token we handed out via a watch link.
+--     Written only by us (service_role). The watch-processing job
+--     validates incoming video_watches.token against a row here
+--     (matching discord_id + day_number) before trusting it — the
+--     public /watch page has no login, so without this a forged
+--     discord_id + made-up token would otherwise pass as "watched".
+-- ─────────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS issued_watch_tokens (
+    id           BIGSERIAL PRIMARY KEY,
+    token        TEXT        NOT NULL UNIQUE,
+    guild_id     BIGINT      NOT NULL,
+    discord_id   BIGINT      NOT NULL,
+    day_number   INTEGER     NOT NULL,
+    created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_issued_watch_tokens_token ON issued_watch_tokens(token);
+
+ALTER TABLE issued_watch_tokens ENABLE ROW LEVEL SECURITY;
+-- No policies at all: only service_role (which bypasses RLS) can read or write this table.
+
+-- ─────────────────────────────────────────────────────────────
+--  10. Training video URLs (v6.0)
 --     Read only by the bot's own service_role key
 --     (see database/training_videos.py). Not exposed to the public key.
 -- ─────────────────────────────────────────────────────────────
@@ -192,3 +218,10 @@ INSERT INTO training_videos (day_number, url, caption) VALUES
     (7, 'https://cdn.example.com/day7.mp4', NULL),
     (8, 'https://cdn.example.com/day8.mp4', NULL)
 ON CONFLICT (day_number) DO NOTHING;
+
+-- ─────────────────────────────────────────────────────────────
+--  11. Team member role (v6.1)
+--     Members holding this role are auto-invited into every
+--     private training thread alongside the enrolled user.
+-- ─────────────────────────────────────────────────────────────
+ALTER TABLE guild_settings ADD COLUMN IF NOT EXISTS team_role_id BIGINT;

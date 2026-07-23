@@ -13,7 +13,19 @@
       "Bash(python -m py_compile bot.py cogs/protocol.py cogs/admin.py views/graduation.py views/dm_ritual.py views/dialogue.py views/video_day.py views/enrollment.py database/base.py database/supabase_db.py utils/bot_logger.py)",
       "Bash(python -m py_compile cogs/admin.py)",
       "Bash(python -m py_compile bot.py cogs/admin.py)",
-      "Bash(python -c \"import cogs.admin; print\\('OK'\\)\")"
+      "Bash(python -c \"import cogs.admin; print\\('OK'\\)\")",
+      "Bash(python -c \"import ast; [ast.parse\\(open\\(f, encoding='utf-8'\\).read\\(\\), f\\) for f in ['database/base.py','database/supabase_db.py','utils/watch_link.py','cogs/protocol.py']]\")",
+      "Bash(python -c \"import ast; [ast.parse\\(open\\(f, encoding='utf-8'\\).read\\(\\), f\\) for f in ['database/training_videos.py','cogs/admin.py']]\")",
+      "Bash(command -v python)",
+      "Bash(command -v python3)",
+      "Bash(py -c \"print\\('ok'\\)\")",
+      "Bash(/c/Users/Lenovo/AppData/Local/Programs/Python/Python313/python -c ' *)",
+      "Bash(python -c \"import ast; ast.parse\\(open\\('cogs/protocol.py', encoding='utf-8'\\).read\\(\\)\\); ast.parse\\(open\\('cogs/admin.py', encoding='utf-8'\\).read\\(\\)\\); ast.parse\\(open\\('database/base.py', encoding='utf-8'\\).read\\(\\)\\); ast.parse\\(open\\('database/supabase_db.py', encoding='utf-8'\\).read\\(\\)\\); print\\('OK'\\)\")",
+      "Bash(python -m py_compile cogs/admin.py views/confirm.py views/__init__.py)",
+      "Bash(python -m py_compile cogs/protocol.py database/base.py database/supabase_db.py)",
+      "Bash(xargs wc -l)",
+      "Bash(python -m pyflakes .)",
+      "Bash(python -m pyflakes cogs/ database/ views/ utils/ content/ bot.py config.py)"
     ]
   }
 }

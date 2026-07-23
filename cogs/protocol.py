@@ -121,6 +121,7 @@ class ProtocolCog(commands.Cog):
         self.db: DatabaseBase = get_database()
         self.bot_log = BotLogger(bot, self.db)
         self.send_daily_messages.start()
+        self.process_video_watches.start()
 
     async def cog_load(self):
         await self.db.initialize()
@@ -131,6 +132,7 @@ class ProtocolCog(commands.Cog):
 
     async def cog_unload(self):
         self.send_daily_messages.cancel()
+        self.process_video_watches.cancel()
         await self.db.close()
         logger.info("Protocol cog unloaded")
 
@@ -151,6 +153,36 @@ class ProtocolCog(commands.Cog):
             await member.remove_roles(role, reason=reason)
         except discord.Forbidden:
             logger.warning(f"Missing permission to remove role {role_id}")
+
+    async def _add_staff_to_thread(
+        self,
+        guild: discord.Guild,
+        thread: discord.Thread,
+        exclude_id: int,
+        team_role_id: int | None,
+    ) -> None:
+        """
+        Add team-role members, administrators, and the guild owner to a
+        private training thread so staff can see it without being invited.
+        """
+        team_role = guild.get_role(team_role_id) if team_role_id else None
+
+        staff: set[discord.Member] = set()
+        for member in guild.members:
+            if member.id == exclude_id or member.bot:
+                continue
+            if member.guild_permissions.administrator or member.id == guild.owner_id:
+                staff.add(member)
+            elif team_role and team_role in member.roles:
+                staff.add(member)
+
+        for member in staff:
+            try:
+                await thread.add_user(member)
+            except discord.Forbidden:
+                logger.warning(f"Missing permission to add {member.id} to thread {thread.id}")
+            except Exception as exc:
+                logger.warning(f"Could not add {member.id} to thread {thread.id}: {exc}")
 
     # ──────────────────────────────────────────
     #  Enrollment handler
@@ -226,6 +258,7 @@ class ProtocolCog(commands.Cog):
         settings = await self.db.get_guild_settings(guild_id)
         threads_channel_id: int | None = settings.get("threads_channel_id")
         role_id: int | None = settings.get("role_id")
+        team_role_id: int | None = settings.get("team_role_id")
 
         # ── Resolve the parent channel threads are created under ──
         parent_channel = (
@@ -238,6 +271,9 @@ class ProtocolCog(commands.Cog):
                 ephemeral=True,
             )
             await self.db.unenroll_user(user.id, guild_id)
+            await self.bot_log.enrollment_failed(
+                guild, user, "No threads channel configured"
+            )
             return
 
         # ── Assign enrollment role ────────────────────────────────
@@ -280,6 +316,9 @@ class ProtocolCog(commands.Cog):
                 await self._remove_onboarding_role(
                     guild, user.id, reason="Enrollment rollback after thread failure"
                 )
+            await self.bot_log.enrollment_failed(
+                guild, user, "Missing permission to create threads"
+            )
             return
         except Exception as exc:
             logger.error(f"Thread creation failed for {user.id}: {exc}")
@@ -292,10 +331,16 @@ class ProtocolCog(commands.Cog):
                 await self._remove_onboarding_role(
                     guild, user.id, reason="Enrollment rollback after thread failure"
                 )
+            await self.bot_log.enrollment_failed(guild, user, f"Thread creation error: {exc}")
             return
 
         # ── Persist thread ID ──────────────────────────────────────
         await self.db.save_channel_id(user.id, guild_id, channel.id)
+
+        # ── Invite staff: team role + admins + owner ────────────────
+        await self._add_staff_to_thread(
+            guild, channel, exclude_id=user.id, team_role_id=team_role_id
+        )
 
         # ── Post pinned onboarding embed + DM ritual ──────────────
         try:
@@ -361,6 +406,79 @@ class ProtocolCog(commands.Cog):
         )
         await self._post_container(channel, view)
 
+    async def _advance_day(
+        self,
+        user: discord.Member | discord.User,
+        guild_id: int,
+        day: int,
+        channel: discord.Thread,
+    ) -> None:
+        """
+        Mark `day` complete for `user` and deliver the next step — either the
+        day-complete notice or full graduation. Shared by the dialogue
+        on-complete callback and the video-watch confirmation job, since
+        both represent the same "day finished" event.
+        """
+        next_day = day + 1
+        await self.db.update_user_day(user.id, guild_id, next_day)
+        # Reset inactivity timer on completion
+        await self.db.update_last_button_click(user.id, guild_id)
+
+        if day == 1:
+            # Day 1 is part of the enrollment session; mark code consumed
+            await self.db.mark_enrollment_used(user.id, guild_id)
+
+        guild = channel.guild
+
+        if next_day > config.TOTAL_DAYS:
+            await channel.send(
+                "**CONGRATULATIONS, GAMBLOR!**\n\n"
+                "You have completed the 8-Day Luckmaxxing Protocol.\n"
+                "You are no longer average. You are now a **statistical anomaly**.\n\n"
+                "Gorillions await you."
+            )
+            # Swap roles: remove enrollment role, assign completion role
+            settings = await self.db.get_guild_settings(guild_id)
+            enroll_role_id: int | None = settings.get("role_id")
+            completion_role_id: int | None = settings.get("completion_role_id")
+            member = guild.get_member(user.id)
+            if member:
+                if enroll_role_id:
+                    enroll_role = guild.get_role(enroll_role_id)
+                    if enroll_role:
+                        try:
+                            await member.remove_roles(
+                                enroll_role, reason="Training complete — role swap"
+                            )
+                        except discord.Forbidden:
+                            logger.warning(
+                                f"Missing permission to remove enrollment role {enroll_role_id}"
+                            )
+                if completion_role_id:
+                    comp_role = guild.get_role(completion_role_id)
+                    if comp_role:
+                        try:
+                            await member.add_roles(
+                                comp_role, reason="Luckmaxxing training complete"
+                            )
+                            logger.info(
+                                f"Assigned completion role {comp_role.name} to {user.id}"
+                            )
+                        except discord.Forbidden:
+                            logger.warning(
+                                f"Missing permission to assign completion role {completion_role_id}"
+                            )
+            grad_view = GraduationActionsView(user)
+            await channel.send(view=grad_view)
+            await self.bot_log.training_complete(guild, user)
+            logger.info(f"User {user.id} completed training in guild {guild_id}")
+        else:
+            await channel.send(
+                f"**Day {day} complete!**\n"
+                f"Day {next_day} training will arrive in 24 hours. Keep pushing."
+            )
+            await self.bot_log.day_complete(guild, user, day)
+
     async def _send_day(
         self,
         user: discord.Member | discord.User,
@@ -378,70 +496,12 @@ class ProtocolCog(commands.Cog):
             return
 
         async def on_day_done(_user):
-            next_day = day + 1
-            await self.db.update_user_day(user.id, guild_id, next_day)
-            # Reset inactivity timer on completion
-            await self.db.update_last_button_click(user.id, guild_id)
-
-            if day == 1:
-                # Day 1 is part of the enrollment session; mark code consumed
-                await self.db.mark_enrollment_used(user.id, guild_id)
-
-            # Resolve the guild object for log embeds
-            guild = channel.guild
-
-            if next_day > config.TOTAL_DAYS:
-                await channel.send(
-                    "**CONGRATULATIONS, GAMBLOR!**\n\n"
-                    "You have completed the 8-Day Luckmaxxing Protocol.\n"
-                    "You are no longer average. You are now a **statistical anomaly**.\n\n"
-                    "Gorillions await you."
-                )
-                # Swap roles: remove enrollment role, assign completion role
-                settings = await self.db.get_guild_settings(guild_id)
-                enroll_role_id: int | None = settings.get("role_id")
-                completion_role_id: int | None = settings.get("completion_role_id")
-                member = guild.get_member(user.id)
-                if member:
-                    if enroll_role_id:
-                        enroll_role = guild.get_role(enroll_role_id)
-                        if enroll_role:
-                            try:
-                                await member.remove_roles(
-                                    enroll_role, reason="Training complete — role swap"
-                                )
-                            except discord.Forbidden:
-                                logger.warning(
-                                    f"Missing permission to remove enrollment role {enroll_role_id}"
-                                )
-                    if completion_role_id:
-                        comp_role = guild.get_role(completion_role_id)
-                        if comp_role:
-                            try:
-                                await member.add_roles(
-                                    comp_role, reason="Luckmaxxing training complete"
-                                )
-                                logger.info(
-                                    f"Assigned completion role {comp_role.name} to {user.id}"
-                                )
-                            except discord.Forbidden:
-                                logger.warning(
-                                    f"Missing permission to assign completion role {completion_role_id}"
-                                )
-                grad_view = GraduationActionsView(user)
-                await channel.send(view=grad_view)
-                await self.bot_log.training_complete(guild, user)
-                logger.info(f"User {user.id} completed training in guild {guild_id}")
-            else:
-                await channel.send(
-                    f"**Day {day} complete!**\n"
-                    f"Day {next_day} training will arrive in 24 hours. Keep pushing."
-                )
-                await self.bot_log.day_complete(guild, user, day)
+            await self._advance_day(user, guild_id, day, channel)
 
         video = get_day_video(day)
         if video:
-            watch_url = build_watch_url(video["url"], day, user.id)
+            watch_url, watch_token = build_watch_url(video["url"], day, user.id)
+            await self.db.record_watch_token(guild_id, user.id, day, watch_token)
             video_view = VideoDayView(
                 get_day_title(day),
                 watch_url,
@@ -550,6 +610,17 @@ class ProtocolCog(commands.Cog):
         guild_id: int = row["guild_id"]
         day: int = row["current_day"]
         channel_id: int | None = row.get("channel_id")
+
+        # Video days use a link-out button, which never fires an interaction
+        # we can see, so last_button_click stays stale even after the user
+        # watches. The existence of a video_watches row for this exact day
+        # is the real signal they've engaged — the watch job may not have
+        # advanced them yet, but a reminder would be wrong either way.
+        if get_day_video(day) and await self.db.has_watched_video(user_id, day):
+            logger.info(
+                f"Skipping reminder for user {user_id} day {day} — video already watched"
+            )
+            return
 
         guild = self.bot.get_guild(guild_id)
         if not guild or not channel_id:
@@ -682,6 +753,80 @@ class ProtocolCog(commands.Cog):
     @send_daily_messages.before_loop
     async def before_daily_loop(self):
         await self.bot.wait_until_ready()
+
+    # ──────────────────────────────────────────
+    #  Video watch confirmations — runs every minute
+    # ──────────────────────────────────────────
+
+    @tasks.loop(minutes=1)
+    async def process_video_watches(self):
+        """
+        Poll video_watches rows the public /watch page inserted, validate each
+        against the token we actually issued in issued_watch_tokens, and
+        advance the user's day on a genuine match. Anything that fails
+        validation (unknown token, or a token that doesn't match the
+        discord_id/day_number it was issued for) is marked processed without
+        advancing progress, so a forged submission is inert rather than
+        silently ignored forever.
+        """
+        for row in await self.db.get_pending_video_watches():
+            try:
+                await self._process_video_watch(row)
+            except Exception as exc:
+                logger.error(
+                    f"Error processing video watch {row.get('id')}: {exc}",
+                    exc_info=True,
+                )
+
+    @process_video_watches.before_loop
+    async def before_process_video_watches(self):
+        await self.bot.wait_until_ready()
+
+    async def _process_video_watch(self, row: dict) -> None:
+        watch_id = row["id"]
+        token = row["token"]
+        day_number = row["day_number"]
+        discord_id = row["discord_id"]
+
+        issued = await self.db.get_issued_watch_token(token)
+        if (
+            not issued
+            or issued["discord_id"] != discord_id
+            or issued["day_number"] != day_number
+        ):
+            logger.warning(
+                f"Rejecting video watch {watch_id} — token doesn't match an "
+                f"issued link (token={token!r}, discord_id={discord_id}, day={day_number})"
+            )
+            await self.db.mark_video_watch_processed(watch_id)
+            return
+
+        guild_id = issued["guild_id"]
+        progress = await self.db.get_user_progress(discord_id, guild_id)
+        if not progress or progress.get("current_day") != day_number:
+            # Already advanced past this day (or unenrolled) — stale/duplicate
+            # confirmation, nothing left to do.
+            await self.db.mark_video_watch_processed(watch_id)
+            return
+
+        guild = self.bot.get_guild(guild_id)
+        channel = (
+            await _get_training_channel(self.bot, progress["channel_id"], guild)
+            if progress.get("channel_id")
+            else None
+        )
+        if not guild or not channel:
+            logger.warning(
+                f"Guild/channel unavailable for video watch {watch_id} — will retry next cycle"
+            )
+            return  # leave unprocessed so we retry once the cache/thread is available
+
+        member = guild.get_member(discord_id)
+        user = member or await self.bot.fetch_user(discord_id)
+
+        await self._advance_day(user, guild_id, day_number, channel)
+        await self.db.mark_video_watch_processed(watch_id)
+        logger.info(f"Processed video watch {watch_id} — user {discord_id} day {day_number}")
 
     # ──────────────────────────────────────────
     #  Guards (shared helpers)

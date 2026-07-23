@@ -1,457 +1,3 @@
-# import secrets
-# import string
-# from datetime import datetime
-# from typing import Any, Dict, List, Optional
-
-# from supabase import create_client, Client
-
-# import config
-# from database.base import DatabaseBase
-# from utils.logger import logger
-
-
-# class SupabaseDatabase(DatabaseBase):
-#     """Concrete Supabase implementation of DatabaseBase."""
-
-#     def __init__(self):
-#         self.client: Optional[Client] = None
-#         self._initialized = False
-
-#         # Attempt eager initialization so the client is ready before async startup.
-#         try:
-#             self.client = create_client(config.SUPABASE_URL, config.SUPABASE_KEY)
-#             self._initialized = True
-#             logger.info("Supabase client created in __init__")
-#         except Exception as exc:
-#             logger.error(f"Failed to create Supabase client in __init__: {exc}")
-
-#     # ─────────────────────────────────────────────
-#     #  Internal helpers
-#     # ─────────────────────────────────────────────
-
-#     def _get_client(self) -> Client:
-#         """Return the Supabase client, re-creating it if it was lost."""
-#         if self.client is None:
-#             logger.warning("Supabase client is None – recreating...")
-#             self.client = create_client(config.SUPABASE_URL, config.SUPABASE_KEY)
-#         return self.client
-
-#     @staticmethod
-#     def _now() -> str:
-#         return datetime.utcnow().isoformat()
-
-#     # ─────────────────────────────────────────────
-#     #  Lifecycle
-#     # ─────────────────────────────────────────────
-
-#     async def initialize(self) -> None:
-#         """Verify the connection by running a lightweight query."""
-#         try:
-#             if self.client is None:
-#                 self.client = create_client(config.SUPABASE_URL, config.SUPABASE_KEY)
-
-#             # Smoke-test the connection
-#             self._get_client().table("enrollments").select("*").limit(1).execute()
-#             self._initialized = True
-#             logger.info("Supabase connection verified")
-#         except Exception as exc:
-#             self._initialized = False
-#             self.client = None
-#             logger.error(f"Supabase initialization failed: {exc}")
-#             raise
-
-#     async def close(self) -> None:
-#         self._initialized = False
-#         self.client = None
-#         logger.info("Supabase connection closed")
-
-#     # ─────────────────────────────────────────────
-#     #  Enrollment IDs
-#     # ─────────────────────────────────────────────
-
-#     async def generate_enrollment_ids(self, guild_id: int, count: int) -> List[str]:
-#         client = self._get_client()
-#         generated: List[str] = []
-#         attempts = 0
-
-#         while len(generated) < count and attempts < count * 3:
-#             attempts += 1
-#             code = "".join(
-#                 secrets.choice(string.ascii_uppercase + string.digits) for _ in range(5)
-#             )
-#             try:
-#                 client.table("enrollment_ids").insert(
-#                     {
-#                         "id_code": code,
-#                         "guild_id": guild_id,
-#                         "used": False,
-#                         "created_at": self._now(),
-#                     }
-#                 ).execute()
-#                 generated.append(code)
-#                 logger.info(f"Generated enrollment ID {code} for guild {guild_id}")
-#             except Exception as exc:
-#                 msg = str(exc).lower()
-#                 if "duplicate" in msg or "unique" in msg:
-#                     # Collision – try again
-#                     continue
-#                 logger.error(f"Error inserting enrollment ID {code}: {exc}")
-
-#         return generated
-
-#     async def get_unused_enrollment_ids(self, guild_id: int) -> List[str]:
-#         try:
-#             resp = (
-#                 self._get_client()
-#                 .table("enrollment_ids")
-#                 .select("id_code")
-#                 .eq("guild_id", guild_id)
-#                 .eq("used", False)
-#                 .order("created_at", desc=True)
-#                 .execute()
-#             )
-#             return [row["id_code"] for row in (resp.data or [])]
-#         except Exception as exc:
-#             logger.error(f"get_unused_enrollment_ids: {exc}")
-#             return []
-
-#     async def verify_enrollment_id(self, enrollment_id: str, guild_id: int) -> bool:
-#         try:
-#             resp = (
-#                 self._get_client()
-#                 .table("enrollment_ids")
-#                 .select("id")
-#                 .eq("id_code", enrollment_id)
-#                 .eq("guild_id", guild_id)
-#                 .eq("used", False)
-#                 .execute()
-#             )
-#             valid = bool(resp.data)
-#             if not valid:
-#                 logger.warning(
-#                     f"Invalid/used enrollment ID {enrollment_id} for guild {guild_id}"
-#                 )
-#             return valid
-#         except Exception as exc:
-#             logger.error(f"verify_enrollment_id: {exc}")
-#             return False
-
-#     # ─────────────────────────────────────────────
-#     #  User Enrollment
-#     # ─────────────────────────────────────────────
-
-#     async def enroll_user_with_id(
-#         self, user_id: int, guild_id: int, enrollment_id: str
-#     ) -> bool:
-#         client = self._get_client()
-#         try:
-#             # Create enrollment row (channel_id filled in later via save_channel_id)
-#             client.table("enrollments").insert(
-#                 {
-#                     "user_id": user_id,
-#                     "guild_id": guild_id,
-#                     "enrollment_id": enrollment_id,
-#                     "enrollment_used": False,
-#                     "current_day": 0,
-#                     "channel_id": None,
-#                     "enrolled_at": self._now(),
-#                 }
-#             ).execute()
-
-#             # Mark the code as taken immediately
-#             client.table("enrollment_ids").update(
-#                 {
-#                     "used": True,
-#                     "used_by": user_id,
-#                     "used_at": self._now(),
-#                 }
-#             ).eq("id_code", enrollment_id).eq("guild_id", guild_id).execute()
-
-#             logger.info(f"User {user_id} enrolled in guild {guild_id}")
-#             return True
-#         except Exception as exc:
-#             msg = str(exc).lower()
-#             if "duplicate" in msg or "unique" in msg:
-#                 logger.warning(f"User {user_id} already enrolled in guild {guild_id}")
-#             else:
-#                 logger.error(f"enroll_user_with_id: {exc}")
-#             return False
-
-#     async def unenroll_user(self, user_id: int, guild_id: int) -> bool:
-#         client = self._get_client()
-#         try:
-#             # Grab the enrollment to find the code to free
-#             row = await self.get_user_progress(user_id, guild_id)
-#             enrollment_id = row.get("enrollment_id") if row else None
-
-#             # Remove analytics rows first to avoid FK issues
-#             try:
-#                 client.table("daily_progress").delete().eq("user_id", user_id).eq(
-#                     "guild_id", guild_id
-#                 ).execute()
-#             except Exception as exc:
-#                 logger.warning(f"Could not delete daily_progress: {exc}")
-
-#             # Remove the enrollment itself
-#             client.table("enrollments").delete().eq("user_id", user_id).eq(
-#                 "guild_id", guild_id
-#             ).execute()
-
-#             # Free the enrollment code
-#             if enrollment_id:
-#                 try:
-#                     client.table("enrollment_ids").update(
-#                         {"used": False, "used_by": None, "used_at": None}
-#                     ).eq("id_code", enrollment_id).eq("guild_id", guild_id).execute()
-#                 except Exception as exc:
-#                     logger.warning(f"Could not free enrollment ID: {exc}")
-
-#             logger.info(f"User {user_id} unenrolled from guild {guild_id}")
-#             return True
-#         except Exception as exc:
-#             logger.error(f"unenroll_user: {exc}")
-#             return False
-
-#     async def mark_enrollment_used(self, user_id: int, guild_id: int) -> bool:
-#         try:
-#             self._get_client().table("enrollments").update(
-#                 {"enrollment_used": True}
-#             ).eq("user_id", user_id).eq("guild_id", guild_id).execute()
-#             return True
-#         except Exception as exc:
-#             logger.error(f"mark_enrollment_used: {exc}")
-#             return False
-
-#     # ─────────────────────────────────────────────
-#     #  Progress Tracking
-#     # ─────────────────────────────────────────────
-
-#     async def get_user_progress(
-#         self, user_id: int, guild_id: int
-#     ) -> Optional[Dict[str, Any]]:
-#         try:
-#             resp = (
-#                 self._get_client()
-#                 .table("enrollments")
-#                 .select("*")
-#                 .eq("user_id", user_id)
-#                 .eq("guild_id", guild_id)
-#                 .execute()
-#             )
-#             return resp.data[0] if resp.data else None
-#         except Exception as exc:
-#             logger.error(f"get_user_progress: {exc}")
-#             return None
-
-#     async def update_user_day(
-#         self, user_id: int, guild_id: int, current_day: int
-#     ) -> bool:
-#         client = self._get_client()
-#         try:
-#             client.table("enrollments").update(
-#                 {
-#                     "current_day": current_day,
-#                     "last_message_sent": self._now(),
-#                     "completed": current_day > config.TOTAL_DAYS,
-#                 }
-#             ).eq("user_id", user_id).eq("guild_id", guild_id).execute()
-
-#             # Append an analytics row
-#             try:
-#                 client.table("daily_progress").insert(
-#                     {
-#                         "user_id": user_id,
-#                         "guild_id": guild_id,
-#                         "day_number": current_day,
-#                         "completed_at": self._now(),
-#                     }
-#                 ).execute()
-#             except Exception as exc:
-#                 logger.warning(f"Could not log daily_progress: {exc}")
-
-#             return True
-#         except Exception as exc:
-#             logger.error(f"update_user_day: {exc}")
-#             return False
-
-#     async def get_all_enrolled_users(self) -> List[Dict[str, Any]]:
-#         """
-#         Returns enrollments where the next daily message is due
-#         (not completed, past the intro, last sent >= 24 h ago or never).
-#         """
-#         try:
-#             resp = (
-#                 self._get_client()
-#                 .table("enrollments")
-#                 .select("*")
-#                 .eq("completed", False)
-#                 .gt("current_day", 1)  # Days 2-8 are sent by the task
-#                 .execute()
-#             )
-
-#             result = []
-#             now = datetime.utcnow()
-
-#             for row in resp.data or []:
-#                 last_sent = row.get("last_message_sent")
-#                 if not last_sent:
-#                     result.append(row)
-#                     continue
-#                 try:
-#                     last_dt = datetime.fromisoformat(
-#                         last_sent.replace("Z", "+00:00")
-#                     ).replace(tzinfo=None)
-#                     if (now - last_dt).total_seconds() >= 86400:
-#                         result.append(row)
-#                 except Exception:
-#                     result.append(row)  # Include if date can't be parsed
-
-#             return result
-#         except Exception as exc:
-#             logger.error(f"get_all_enrolled_users: {exc}")
-#             return []
-
-#     # ─────────────────────────────────────────────
-#     #  Channel management
-#     # ─────────────────────────────────────────────
-
-#     async def save_channel_id(
-#         self, user_id: int, guild_id: int, channel_id: int
-#     ) -> bool:
-#         """Store the private training channel ID on the enrollment row."""
-#         try:
-#             self._get_client().table("enrollments").update(
-#                 {"channel_id": channel_id}
-#             ).eq("user_id", user_id).eq("guild_id", guild_id).execute()
-#             logger.info(
-#                 f"Saved channel {channel_id} for user {user_id} in guild {guild_id}"
-#             )
-#             return True
-#         except Exception as exc:
-#             logger.error(f"save_channel_id: {exc}")
-#             return False
-
-#     # ─────────────────────────────────────────────
-#     #  Guild Settings
-#     # ─────────────────────────────────────────────
-
-#     async def get_guild_settings(self, guild_id: int) -> Dict[str, Any]:
-#         client = self._get_client()
-#         try:
-#             resp = (
-#                 client.table("guild_settings")
-#                 .select("*")
-#                 .eq("guild_id", guild_id)
-#                 .execute()
-#             )
-#             if resp.data:
-#                 return resp.data[0]
-
-#             # First visit – create default row
-#             defaults: Dict[str, Any] = {
-#                 "guild_id": guild_id,
-#                 "bot_enabled": True,
-#                 "category_id": None,
-#                 "role_id": None,
-#                 "created_at": self._now(),
-#             }
-#             try:
-#                 client.table("guild_settings").insert(defaults).execute()
-#             except Exception as exc:
-#                 logger.warning(f"Could not insert default guild_settings: {exc}")
-#             return defaults
-#         except Exception as exc:
-#             logger.error(f"get_guild_settings: {exc}")
-#             return {"guild_id": guild_id, "bot_enabled": True}
-
-#     async def toggle_bot(self, guild_id: int, enabled: bool) -> None:
-#         try:
-#             self._get_client().table("guild_settings").upsert(
-#                 {
-#                     "guild_id": guild_id,
-#                     "bot_enabled": enabled,
-#                     "updated_at": self._now(),
-#                 }
-#             ).execute()
-#         except Exception as exc:
-#             logger.error(f"toggle_bot: {exc}")
-
-#     async def is_bot_enabled(self, guild_id: int) -> bool:
-#         settings = await self.get_guild_settings(guild_id)
-#         return settings.get("bot_enabled", True)
-
-#     async def set_guild_config(
-#         self,
-#         guild_id: int,
-#         category_id: Optional[int] = None,
-#         role_id: Optional[int] = None,
-#         log_channel_id: Optional[int] = None,
-#     ) -> bool:
-#         """Upsert category_id, role_id, and/or log_channel_id for a guild."""
-#         try:
-#             payload: Dict[str, Any] = {
-#                 "guild_id": guild_id,
-#                 "updated_at": self._now(),
-#             }
-#             if category_id is not None:
-#                 payload["category_id"] = category_id
-#             if role_id is not None:
-#                 payload["role_id"] = role_id
-#             if log_channel_id is not None:
-#                 payload["log_channel_id"] = log_channel_id
-
-#             self._get_client().table("guild_settings").upsert(payload).execute()
-#             logger.info(f"Guild config updated for {guild_id}: {payload}")
-#             return True
-#         except Exception as exc:
-#             logger.error(f"set_guild_config: {exc}")
-#             return False
-
-#     # ─────────────────────────────────────────────
-#     #  Statistics
-#     # ─────────────────────────────────────────────
-
-#     async def get_stats(self, guild_id: Optional[int] = None) -> Dict[str, Any]:
-#         client = self._get_client()
-#         try:
-
-#             def _build(eq_completed: bool):
-#                 q = (
-#                     client.table("enrollments")
-#                     .select("*", count="exact")
-#                     .eq("completed", eq_completed)
-#                 )
-#                 if guild_id:
-#                     q = q.eq("guild_id", guild_id)
-#                 return q.execute()
-
-#             total_resp = client.table("enrollments").select("*", count="exact")
-#             if guild_id:
-#                 total_resp = total_resp.eq("guild_id", guild_id)
-#             total_resp = total_resp.execute()
-
-#             done_resp = _build(True)
-
-#             total = (
-#                 total_resp.count
-#                 if hasattr(total_resp, "count")
-#                 else len(total_resp.data or [])
-#             )
-#             done = (
-#                 done_resp.count
-#                 if hasattr(done_resp, "count")
-#                 else len(done_resp.data or [])
-#             )
-
-#             return {
-#                 "total_enrolled": total,
-#                 "completed": done,
-#                 "in_progress": total - done,
-#             }
-#         except Exception as exc:
-#             logger.error(f"get_stats: {exc}")
-#             return {"total_enrolled": 0, "completed": 0, "in_progress": 0}
-
 import secrets
 import string
 from datetime import datetime
@@ -1012,6 +558,7 @@ class SupabaseDatabase(DatabaseBase):
                 "threads_channel_id": None,
                 "role_id": None,
                 "completion_role_id": None,
+                "team_role_id": None,
                 "created_at": self._now(),
             }
             try:
@@ -1046,6 +593,7 @@ class SupabaseDatabase(DatabaseBase):
         role_id: Optional[int] = None,
         completion_role_id: Optional[int] = None,
         log_channel_id: Optional[int] = None,
+        team_role_id: Optional[int] = None,
     ) -> bool:
         try:
             payload: Dict[str, Any] = {
@@ -1060,6 +608,8 @@ class SupabaseDatabase(DatabaseBase):
                 payload["completion_role_id"] = completion_role_id
             if log_channel_id is not None:
                 payload["log_channel_id"] = log_channel_id
+            if team_role_id is not None:
+                payload["team_role_id"] = team_role_id
 
             self._get_client().table("guild_settings").upsert(payload).execute()
             logger.info(f"Guild config updated for {guild_id}: {payload}")
@@ -1112,3 +662,82 @@ class SupabaseDatabase(DatabaseBase):
         except Exception as exc:
             logger.error(f"get_stats: {exc}")
             return {"total_enrolled": 0, "completed": 0, "in_progress": 0}
+
+    # ─────────────────────────────────────────────
+    #  Watch tokens
+    # ─────────────────────────────────────────────
+
+    async def record_watch_token(
+        self, guild_id: int, discord_id: int, day_number: int, token: str
+    ) -> bool:
+        try:
+            self._get_client().table("issued_watch_tokens").insert(
+                {
+                    "token": token,
+                    "guild_id": guild_id,
+                    "discord_id": discord_id,
+                    "day_number": day_number,
+                    "created_at": self._now(),
+                }
+            ).execute()
+            return True
+        except Exception as exc:
+            logger.error(f"record_watch_token: {exc}")
+            return False
+
+    async def get_issued_watch_token(self, token: str) -> Optional[Dict[str, Any]]:
+        try:
+            resp = (
+                self._get_client()
+                .table("issued_watch_tokens")
+                .select("*")
+                .eq("token", token)
+                .limit(1)
+                .execute()
+            )
+            return resp.data[0] if resp.data else None
+        except Exception as exc:
+            logger.error(f"get_issued_watch_token: {exc}")
+            return None
+
+    async def get_pending_video_watches(self, limit: int = 25) -> List[Dict[str, Any]]:
+        try:
+            resp = (
+                self._get_client()
+                .table("video_watches")
+                .select("*")
+                .eq("processed", False)
+                .order("created_at")
+                .limit(limit)
+                .execute()
+            )
+            return resp.data or []
+        except Exception as exc:
+            logger.error(f"get_pending_video_watches: {exc}")
+            return []
+
+    async def mark_video_watch_processed(self, watch_id: int) -> bool:
+        try:
+            self._get_client().table("video_watches").update(
+                {"processed": True}
+            ).eq("id", watch_id).execute()
+            return True
+        except Exception as exc:
+            logger.error(f"mark_video_watch_processed: {exc}")
+            return False
+
+    async def has_watched_video(self, discord_id: int, day_number: int) -> bool:
+        try:
+            resp = (
+                self._get_client()
+                .table("video_watches")
+                .select("id")
+                .eq("discord_id", discord_id)
+                .eq("day_number", day_number)
+                .limit(1)
+                .execute()
+            )
+            return bool(resp.data)
+        except Exception as exc:
+            logger.error(f"has_watched_video: {exc}")
+            return False

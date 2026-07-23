@@ -123,20 +123,6 @@ class BotLogger:
         embed.set_footer(text=self._now())
         await self._send(guild, embed)
 
-    async def inactivity_boot(self, guild: discord.Guild, user_id: int) -> None:
-        """User was automatically removed due to 24-hour inactivity."""
-        embed = discord.Embed(
-            title="Inactivity Boot",
-            color=config.EMBED_COLOR,
-            timestamp=datetime.now(timezone.utc),
-        )
-        embed.add_field(name="User ID", value=str(user_id), inline=True)
-        embed.add_field(
-            name="Reason", value="No button interaction for 24 hours", inline=False
-        )
-        embed.set_footer(text=self._now())
-        await self._send(guild, embed)
-
     async def bot_toggled(
         self,
         guild: discord.Guild,

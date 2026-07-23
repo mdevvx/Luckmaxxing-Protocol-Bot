@@ -1,3 +1,4 @@
+from datetime import datetime
 from typing import Any, Dict, Optional
 
 from supabase import Client, create_client
@@ -5,9 +6,9 @@ from supabase import Client, create_client
 import config
 from utils.logger import logger
 
-# Deliberately independent of database/supabase_db.py (currently disabled/WIP) —
-# this is a small, self-contained read path so training video lookups keep
-# working regardless of that file's state.
+# Deliberately independent of database/supabase_db.py's SupabaseDatabase class —
+# this is a small, self-contained read path with its own client so training
+# video lookups don't depend on that class being initialized.
 _client: Optional[Client] = None
 
 
@@ -35,3 +36,21 @@ def get_training_video(day: int) -> Optional[Dict[str, Any]]:
 
     rows = response.data or []
     return rows[0] if rows else None
+
+
+def set_training_video(day: int, url: str, caption: Optional[str] = None) -> bool:
+    """Insert or update the training video row for the given day."""
+    try:
+        _get_client().table("training_videos").upsert(
+            {
+                "day_number": day,
+                "url": url,
+                "caption": caption,
+                "updated_at": datetime.utcnow().isoformat(),
+            },
+            on_conflict="day_number",
+        ).execute()
+        return True
+    except Exception as exc:
+        logger.error(f"Failed to set training video for day {day}: {exc}")
+        return False
