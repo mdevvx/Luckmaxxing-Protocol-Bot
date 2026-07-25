@@ -803,9 +803,11 @@ class ProtocolCog(commands.Cog):
 
         guild_id = issued["guild_id"]
         progress = await self.db.get_user_progress(discord_id, guild_id)
-        if not progress or progress.get("current_day") != day_number:
+        if not progress or progress.get("current_day") > day_number:
             # Already advanced past this day (or unenrolled) — stale/duplicate
-            # confirmation, nothing left to do.
+            # confirmation, nothing left to do. Day 1 is enrolled at
+            # current_day=0 (set before Day 1 is sent), so this must allow
+            # current_day <= day_number rather than requiring equality.
             await self.db.mark_video_watch_processed(watch_id)
             return
 
