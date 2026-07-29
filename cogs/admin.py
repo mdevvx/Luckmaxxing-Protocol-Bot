@@ -573,13 +573,19 @@ class AdminCog(commands.Cog):
         try:
             # Register to this guild first (copy_global_to reads from the
             # in-memory global command list, so it must run before we clear it).
+            global_cmds = self.bot.tree.get_commands(guild=None)
             self.bot.tree.copy_global_to(guild=ctx.guild)
             guild_cmds = await self.bot.tree.sync(guild=ctx.guild)
 
             # Then wipe any stale globally-synced commands so they stop
             # showing up as duplicates alongside the guild-scoped copies.
+            # clear_commands() empties the in-memory global list too, so
+            # restore it afterwards or the next guild's $sync would have
+            # nothing left to copy_global_to.
             self.bot.tree.clear_commands(guild=None)
             await self.bot.tree.sync()
+            for cmd in global_cmds:
+                self.bot.tree.add_command(cmd)
 
             logger.info(
                 f"$sync: registered {len(guild_cmds)} commands to guild {ctx.guild.id}"
