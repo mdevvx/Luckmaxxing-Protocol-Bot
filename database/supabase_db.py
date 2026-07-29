@@ -446,11 +446,15 @@ class SupabaseDatabase(DatabaseBase):
         self, min_seconds: int, alert_count: int
     ) -> List[Dict[str, Any]]:
         """
-        Return non-completed users (day >= 2) whose:
+        Return non-completed users whose:
         - daily_alert_count == alert_count  (hasn't had this alert yet)
         - last_content_delivered_at >= min_seconds ago
         - last_button_click is NULL or before last_content_delivered_at
           (user hasn't responded since delivery)
+
+        Not filtered by current_day: Day 1 sits at current_day == 0 until it's
+        completed (see update_user_day), so day-1 stragglers need to be caught
+        here too, not just day 2-8 ones.
         """
         try:
             resp = (
@@ -458,7 +462,6 @@ class SupabaseDatabase(DatabaseBase):
                 .table("enrollments")
                 .select("*")
                 .eq("completed", False)
-                .gte("current_day", 2)
                 .eq("daily_alert_count", alert_count)
                 .execute()
             )
@@ -498,6 +501,24 @@ class SupabaseDatabase(DatabaseBase):
             return result
         except Exception as exc:
             logger.error(f"get_users_needing_alert: {exc}")
+            return []
+
+    async def get_users_missing_delivery_timestamp(
+        self, guild_id: int
+    ) -> List[Dict[str, Any]]:
+        try:
+            resp = (
+                self._get_client()
+                .table("enrollments")
+                .select("*")
+                .eq("guild_id", guild_id)
+                .eq("completed", False)
+                .is_("last_content_delivered_at", "null")
+                .execute()
+            )
+            return resp.data or []
+        except Exception as exc:
+            logger.error(f"get_users_missing_delivery_timestamp: {exc}")
             return []
 
     async def get_enrollment_by_channel(

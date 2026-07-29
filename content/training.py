@@ -4,31 +4,12 @@ Training content for the Luckmaxxing Protocol.
 Format: list of (speaker, message) tuples.
   speaker is either "Intern" (coach) or "Gamblors" (students / user response).
 
-Day 0 -> Introduction (sent immediately on enrollment)
-Day 1 -> First real lesson (sent right after intro, same session)
+Day 1 -> First real lesson (sent immediately when the user activates the
+         initiation button on enrollment — see views/dm_ritual.py)
 Days 2-8 -> Delivered automatically every 24 hours.
 """
 
 from database.training_videos import get_training_video
-
-INTRO = [
-    (
-        "Intern",
-        "Enrolling in the Luckmaxxing program has been one of the best decisions of your life. "
-        "From this moment on you are no longer an average redacted gamblor. "
-        "You are now a work in progress to become a statistical anomaly.",
-    ),
-    ("Gamblors", "YES, CHIEF!"),
-    (
-        "Intern",
-        "Throughout our 8-day Luckmaxxing Training we will equip you with the tools required "
-        "to become one of the best. Take your training seriously, complete the exercises with "
-        "focus, and you will surpass limits beyond your comprehension.",
-    ),
-    ("Gamblors", "YES, CHIEF!"),
-    ("Intern", "Gorillions await you."),
-    ("Gamblors", "GORILLIONS, CHIEF."),
-]
 
 DAY_1 = [
     (
@@ -296,7 +277,6 @@ DAY_8 = [
 ]
 
 _CONTENT_MAP = {
-    0: INTRO,
     1: DAY_1,
     2: DAY_2,
     3: DAY_3,
@@ -308,7 +288,6 @@ _CONTENT_MAP = {
 }
 
 _TITLE_MAP = {
-    0: "Luckmaxxing Protocol - Introduction",
     1: "Day 1 - The New Beginning",
     2: "Day 2 - Pattern Recognition",
     3: "Day 3 - Environmental Cleanup",

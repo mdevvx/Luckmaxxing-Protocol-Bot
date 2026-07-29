@@ -405,6 +405,59 @@ class AdminCog(commands.Cog):
         )
 
     # ──────────────────────────────────────────
+    #  /fixreminders
+    # ──────────────────────────────────────────
+
+    @app_commands.command(
+        name="fixreminders",
+        description="Backfill the reminder clock for users stuck with no delivery timestamp (Admin only)",
+    )
+    @app_commands.default_permissions(administrator=True)
+    async def fix_reminders(self, interaction: discord.Interaction):
+        """
+        Stamps last_content_delivered_at=now for any non-completed enrollment
+        in this guild that's missing it — rows that predate a delivery point
+        stamping that timestamp (e.g. Day 1 before the initiation-button
+        rework) and so can never be picked up by the 24h reminder job.
+        """
+        if not await self._check_enabled(interaction):
+            return
+        await interaction.response.defer(ephemeral=True)
+
+        stuck = await self.db.get_users_missing_delivery_timestamp(interaction.guild.id)
+        if not stuck:
+            await interaction.followup.send(
+                "No stuck rows found — everyone already has a delivery timestamp.",
+                ephemeral=True,
+            )
+            return
+
+        fixed = []
+        for row in stuck:
+            user_id = row["user_id"]
+            if await self.db.update_content_delivered(user_id, interaction.guild.id):
+                fixed.append(user_id)
+
+        mentions = [f"<@{uid}>" for uid in fixed]
+        mentions_value = "\n".join(mentions[:20]) or "None"
+        if len(mentions) > 20:
+            mentions_value += f"\n… and {len(mentions) - 20} more"
+
+        embed = discord.Embed(
+            title="Reminder Backfill Complete",
+            description=(
+                f"Stamped a fresh delivery time for **{len(fixed)}** stuck user(s). "
+                "Their 24h reminder window now starts counting from now."
+            ),
+            color=config.EMBED_COLOR,
+        )
+        embed.add_field(name="Users", value=mentions_value, inline=False)
+        await interaction.followup.send(embed=embed, ephemeral=True)
+        logger.info(
+            f"/fixreminders: backfilled {len(fixed)} row(s) in guild {interaction.guild.id}"
+        )
+
+    # ──────────────────────────────────────────
     #  /globalstats
     # ──────────────────────────────────────────
 

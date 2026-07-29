@@ -342,16 +342,15 @@ class ProtocolCog(commands.Cog):
             guild, channel, exclude_id=user.id, team_role_id=team_role_id
         )
 
-        # ── Post pinned onboarding embed + DM ritual ──────────────
+        # ── Post pinned onboarding embed + initiation button ──────
+        # Day 1 is not sent here — it drops when the user clicks the
+        # initiation button below (see handle_dm_ritual).
         try:
             onboarding_msg = await channel.send(view=_onboarding_view(user))
             await onboarding_msg.pin()
             await channel.send(view=DMRitualView(on_confirm=self.handle_dm_ritual))
         except Exception as exc:
             logger.warning(f"Could not post onboarding messages: {exc}")
-
-        # ── Start Intro + Day 1 ───────────────────────────────────
-        await self._send_intro_and_day1(user, guild_id, channel)
 
         # ── Confirm to the user ───────────────────────────────────
         await interaction.followup.send(
@@ -363,48 +362,43 @@ class ProtocolCog(commands.Cog):
             f"User {user.id} enrolled — thread {channel.id} in guild {guild_id}"
         )
 
-    async def handle_dm_ritual(self, interaction: discord.Interaction) -> None:
-        """Called by DMRitualView after it successfully DMs the user."""
-        if interaction.guild is None:
+    async def handle_dm_ritual(
+        self, interaction: discord.Interaction, dm_ok: bool
+    ) -> None:
+        """
+        Called by DMRitualView after its DM send attempt. Marks the DM ack
+        (if the DM went through) and drops Day 1 into the thread — the DM
+        outcome shouldn't gate training delivery.
+        """
+        guild = interaction.guild
+        if guild is None:
             return
-        await self.db.mark_dm_ack(interaction.user.id, interaction.guild.id)
+        user = interaction.user
+        guild_id = guild.id
+
+        if dm_ok:
+            await self.db.mark_dm_ack(user.id, guild_id)
+        await self.db.update_last_button_click(user.id, guild_id)
+
+        channel = interaction.channel
+        if not isinstance(channel, discord.Thread):
+            logger.warning(
+                f"handle_dm_ritual: interaction channel not a thread for {user.id}"
+            )
+            return
+
+        await self._send_day(user, guild_id, 1, channel)
+        # Stamp delivery so the 24h reminder job (get_users_needing_alert) has
+        # a timestamp to measure against — mirrors what _deliver_daily_content
+        # does for days 2-8.
+        await self.db.update_content_delivered(user.id, guild_id)
         logger.info(
-            f"User {interaction.user.id} completed DM ritual in guild {interaction.guild.id}"
+            f"User {user.id} activated initiation (dm_ok={dm_ok}) in guild {guild_id}"
         )
 
     # ──────────────────────────────────────────
     #  Content delivery
     # ──────────────────────────────────────────
-
-    async def _send_intro_and_day1(
-        self,
-        user: discord.Member | discord.User,
-        guild_id: int,
-        channel: discord.Thread,
-    ):
-        """Send the Intro dialogue; on completion, immediately send Day 1."""
-
-        intro_content = get_content(0)
-        if not intro_content:
-            logger.error("Intro content missing")
-            return
-
-        async def on_intro_done(_user):
-            # Record button click to reset inactivity timer
-            await self.db.update_last_button_click(user.id, guild_id)
-            await asyncio.sleep(1)  # Brief pause for UX
-            await self._send_day(user, guild_id, 1, channel)
-
-        view = DialogueView(
-            get_day_title(0),
-            intro_content,
-            on_complete=on_intro_done,
-            user_id=user.id,
-            on_button_click=lambda: asyncio.create_task(
-                self.db.update_last_button_click(user.id, guild_id)
-            ),
-        )
-        await self._post_container(channel, view)
 
     async def _advance_day(
         self,
@@ -608,7 +602,9 @@ class ProtocolCog(commands.Cog):
         """Send the single reminder for a user who hasn't responded to their day's content."""
         user_id: int = row["user_id"]
         guild_id: int = row["guild_id"]
-        day: int = row["current_day"]
+        # current_day sits at 0 while Day 1 is in progress (it only becomes 2
+        # once Day 1 completes), so 0 means "still on day 1" here.
+        day: int = max(1, row["current_day"])
         channel_id: int | None = row.get("channel_id")
 
         # Video days use a link-out button, which never fires an interaction

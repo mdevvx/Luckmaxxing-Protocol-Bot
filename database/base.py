@@ -125,6 +125,17 @@ class DatabaseBase(ABC):
         pass
 
     @abstractmethod
+    async def get_users_missing_delivery_timestamp(
+        self, guild_id: int
+    ) -> List[Dict[str, Any]]:
+        """Return non-completed enrollments in this guild with no
+        last_content_delivered_at set — these can never surface in
+        get_users_needing_alert since it has nothing to measure 24h
+        against. Used to backfill rows stuck before delivery started
+        being stamped for their current step."""
+        pass
+
+    @abstractmethod
     async def record_watch_token(
         self, guild_id: int, discord_id: int, day_number: int, token: str
     ) -> bool:

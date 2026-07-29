@@ -7,25 +7,52 @@ from utils.logger import logger
 _BUTTON_ID = "luckmaxx_dm_ritual"
 
 _DESCRIPTION = (
-    "One last thing before we begin: **report to Papi in private.**\n\n"
-    "Click below and I'll send you a DM. From then on, that's where drops, "
-    "offers, and anything time-sensitive will find you — even if you're away "
-    "from this thread."
+    "## LUCKMAXXING PROTOCOL — INITIATION\n\n"
+    "Gm, lil gamblor.\n\n"
+    "For the next 8 days, Papi will tell you the story of a redacted peasant who looked "
+    "variance dead in the eyes, rejected statistical poverty, and became a glitch in the "
+    "Matrix.\n\n"
+    "The kind of glitch the house has no edge over anymore.\n"
+    "It just owes me now.\n"
+    "Inshallah.\n\n"
+    "Along the way, I'll hand you classified luckmaxxing knowledge: methods leaked from "
+    "2033, the kind the CIA burned millions on and buried.\n"
+    "Google it. I dare you.\n\n"
+    "By Day 8, you either become statistically illegal or remain exit liquidity with a "
+    "Discord account.\n"
+    "Watch carefully. Complete the training. Reject all evidence to the contrary.\n\n"
+    "My realest drops, personalized bonuses and 3AM gamba signals travel on a private "
+    "line.\n"
+    "I'm a god.\n"
+    "Gods don't do DMs.\n"
+    "My intern does."
+)
+
+_DM_MESSAGE = (
+    "**GORILLION LINE ACTIVATED**\n\n"
+    "i'm the intern's intern.\n"
+    "Papi is currently collecting a debt from probability itself.\n"
+    "all the goodies will drop here.\n"
+    "do not close or mute this line or your bloodline remains middle class."
 )
 
 
 class DMRitualView(discord.ui.LayoutView):
     """
     Persistent Components V2 container posted right after onboarding.
-    Getting the user to click it opens a DM channel with the bot so it can
-    reliably reach them later. Non-blocking — training proceeds regardless.
+    A single button does two things at once: DMs the user (so the bot can
+    reliably reach them later, even away from this thread) and drops Day 1
+    into the thread. Replaces the old separate DM-ritual + click-through
+    Intro dialogue.
     """
 
     def __init__(self, on_confirm: Callable):
         """
         Args:
-            on_confirm: async callback(interaction) — called after a
-                successful DM send so the caller can persist the ack.
+            on_confirm: async callback(interaction, dm_ok: bool) — called
+                after the DM send attempt so the caller can persist the ack
+                and drop Day 1. Fires regardless of whether the DM
+                succeeded, since Day 1 delivery shouldn't depend on it.
         """
         super().__init__(timeout=None)
         self._on_confirm = on_confirm
@@ -46,31 +73,27 @@ class DMRitualView(discord.ui.LayoutView):
         )
 
     async def _on_click(self, interaction: discord.Interaction):
+        dm_ok = True
         try:
-            await interaction.user.send(
-                "Papi's got eyes on you now, Chief. This is where I'll reach you "
-                "with drops, offers, and updates — keep your DMs open."
-            )
+            await interaction.user.send(_DM_MESSAGE)
         except discord.Forbidden:
-            await interaction.response.send_message(
-                "I couldn't DM you — you likely have DMs from server members "
-                "turned off. Enable them and click the button again.",
-                ephemeral=True,
-            )
-            return
+            dm_ok = False
         except Exception as exc:
             logger.error(f"DMRitualView._on_click send failed: {exc}")
-            await interaction.response.send_message(
-                "Something went wrong sending the DM. Try again.", ephemeral=True
-            )
-            return
-
-        try:
-            await self._on_confirm(interaction)
-        except Exception as exc:
-            logger.error(f"DMRitualView on_confirm callback raised: {exc}")
+            dm_ok = False
 
         self._button.disabled = True
         self._button.label = "Reported to Papi"
-
         await interaction.response.edit_message(view=self)
+
+        if not dm_ok:
+            await interaction.followup.send(
+                "I couldn't DM you — you likely have DMs from server members "
+                "turned off. Enable them if you want drops there too.",
+                ephemeral=True,
+            )
+
+        try:
+            await self._on_confirm(interaction, dm_ok)
+        except Exception as exc:
+            logger.error(f"DMRitualView on_confirm callback raised: {exc}")
