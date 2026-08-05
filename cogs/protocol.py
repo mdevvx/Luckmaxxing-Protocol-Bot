@@ -660,7 +660,8 @@ class ProtocolCog(commands.Cog):
         """
         Every 30 minutes:
         1. For users whose 24-hour window has elapsed: if they responded, deliver the
-           next day's content; if not, reset the alert timer without re-posting.
+           next day's content; if not, re-arm tomorrow's due-check without re-posting
+           (last_content_delivered_at is left untouched so alert timing stays accurate).
         2. Send a single reminder per cycle to users who haven't responded.
         """
         await self._deliver_daily_content()
@@ -707,10 +708,10 @@ class ProtocolCog(commands.Cog):
                             ).replace(tzinfo=None)
                             user_responded = click_dt > delivered_dt
                         if not user_responded:
-                            await self.db.update_content_delivered(user_id, guild_id)
+                            await self.db.reset_delivery_window(user_id, guild_id)
                             logger.info(
                                 f"User {user_id} hasn't responded to day {day} — "
-                                "resetting alert timer, skipping re-post"
+                                "re-arming due-check, skipping re-post"
                             )
                             await asyncio.sleep(0.5)
                             continue

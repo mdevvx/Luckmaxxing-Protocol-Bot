@@ -114,6 +114,15 @@ class DatabaseBase(ABC):
         pass
 
     @abstractmethod
+    async def reset_delivery_window(self, user_id: int, guild_id: int) -> bool:
+        """
+        Re-arm the daily due-check (last_message_sent) without touching
+        last_content_delivered_at, so the 24h alert clock keeps counting
+        from the original delivery time.
+        """
+        pass
+
+    @abstractmethod
     async def update_alert_count(self, user_id: int, guild_id: int, count: int) -> bool:
         pass
 

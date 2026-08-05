@@ -432,6 +432,22 @@ class SupabaseDatabase(DatabaseBase):
             logger.error(f"update_content_delivered: {exc}")
             return False
 
+    async def reset_delivery_window(self, user_id: int, guild_id: int) -> bool:
+        """
+        Called when a user hasn't responded since their last delivery. Bumps
+        last_message_sent so the due-check re-arms tomorrow instead of every
+        30 min, but deliberately leaves last_content_delivered_at alone so
+        get_users_needing_alert can still see the true elapsed time.
+        """
+        try:
+            self._get_client().table("enrollments").update(
+                {"last_message_sent": self._now()}
+            ).eq("user_id", user_id).eq("guild_id", guild_id).execute()
+            return True
+        except Exception as exc:
+            logger.error(f"reset_delivery_window: {exc}")
+            return False
+
     async def update_alert_count(self, user_id: int, guild_id: int, count: int) -> bool:
         try:
             self._get_client().table("enrollments").update(

@@ -410,51 +410,77 @@ class AdminCog(commands.Cog):
 
     @app_commands.command(
         name="fixreminders",
-        description="Backfill the reminder clock for users stuck with no delivery timestamp (Admin only)",
+        description="Backfill stuck delivery timestamps and fire overdue reminders now (Admin only)",
     )
     @app_commands.default_permissions(administrator=True)
     async def fix_reminders(self, interaction: discord.Interaction):
         """
-        Stamps last_content_delivered_at=now for any non-completed enrollment
-        in this guild that's missing it — rows that predate a delivery point
-        stamping that timestamp (e.g. Day 1 before the initiation-button
-        rework) and so can never be picked up by the 24h reminder job.
+        Two passes over this guild's non-completed enrollments:
+        1. Stamp last_content_delivered_at=now for rows missing it entirely
+           (predates the delivery-timestamp rework).
+        2. Immediately fire the reminder for anyone already overdue — not
+           responded, not yet alerted, delivered over an hour ago. Covers
+           rows left stuck by the (now-fixed) alert-timer reset bug instead
+           of making them wait out another natural 24h cycle.
         """
         if not await self._check_enabled(interaction):
             return
         await interaction.response.defer(ephemeral=True)
 
-        stuck = await self.db.get_users_missing_delivery_timestamp(interaction.guild.id)
-        if not stuck:
-            await interaction.followup.send(
-                "No stuck rows found — everyone already has a delivery timestamp.",
-                ephemeral=True,
-            )
-            return
-
+        missing = await self.db.get_users_missing_delivery_timestamp(interaction.guild.id)
         fixed = []
-        for row in stuck:
+        for row in missing:
             user_id = row["user_id"]
             if await self.db.update_content_delivered(user_id, interaction.guild.id):
                 fixed.append(user_id)
 
-        mentions = [f"<@{uid}>" for uid in fixed]
-        mentions_value = "\n".join(mentions[:20]) or "None"
-        if len(mentions) > 20:
-            mentions_value += f"\n… and {len(mentions) - 20} more"
+        protocol_cog = self.bot.get_cog("ProtocolCog")
+        alerted = []
+        if protocol_cog:
+            due_now = await self.db.get_users_needing_alert(min_seconds=3600, alert_count=0)
+            for row in due_now:
+                if row.get("guild_id") != interaction.guild.id:
+                    continue
+                try:
+                    await protocol_cog._send_alert(row)
+                    alerted.append(row["user_id"])
+                except Exception as exc:
+                    logger.error(f"/fixreminders: failed to alert {row['user_id']}: {exc}")
 
-        embed = discord.Embed(
-            title="Reminder Backfill Complete",
-            description=(
-                f"Stamped a fresh delivery time for **{len(fixed)}** stuck user(s). "
-                "Their 24h reminder window now starts counting from now."
-            ),
-            color=config.EMBED_COLOR,
-        )
-        embed.add_field(name="Users", value=mentions_value, inline=False)
+        if not fixed and not alerted:
+            await interaction.followup.send(
+                "No stuck rows found — everyone has a delivery timestamp and no one is overdue for a reminder.",
+                ephemeral=True,
+            )
+            return
+
+        embed = discord.Embed(title="Reminder Backfill Complete", color=config.EMBED_COLOR)
+
+        if fixed:
+            mentions = [f"<@{uid}>" for uid in fixed]
+            mentions_value = "\n".join(mentions[:20]) or "None"
+            if len(mentions) > 20:
+                mentions_value += f"\n… and {len(mentions) - 20} more"
+            embed.add_field(
+                name=f"Backfilled delivery timestamp ({len(fixed)})",
+                value=mentions_value,
+                inline=False,
+            )
+
+        if alerted:
+            mentions = [f"<@{uid}>" for uid in alerted]
+            mentions_value = "\n".join(mentions[:20]) or "None"
+            if len(mentions) > 20:
+                mentions_value += f"\n… and {len(mentions) - 20} more"
+            embed.add_field(
+                name=f"Fired overdue reminder ({len(alerted)})",
+                value=mentions_value,
+                inline=False,
+            )
+
         await interaction.followup.send(embed=embed, ephemeral=True)
         logger.info(
-            f"/fixreminders: backfilled {len(fixed)} row(s) in guild {interaction.guild.id}"
+            f"/fixreminders: backfilled {len(fixed)}, alerted {len(alerted)} in guild {interaction.guild.id}"
         )
 
     # ──────────────────────────────────────────
