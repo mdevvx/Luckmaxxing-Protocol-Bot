@@ -348,7 +348,9 @@ class AdminCog(commands.Cog):
         confirm_view = ConfirmView(interaction.user.id)
         await interaction.response.send_message(
             f"Unenroll {user.mention}? This deletes their training thread, "
-            "removes their protocol role, and clears their progress. This cannot be undone.",
+            "removes their protocol role, and wipes all their progress data "
+            "for this server (day progress, video watches, issued watch links). "
+            "This cannot be undone.",
             view=confirm_view,
             ephemeral=True,
         )
@@ -415,13 +417,18 @@ class AdminCog(commands.Cog):
     @app_commands.default_permissions(administrator=True)
     async def fix_reminders(self, interaction: discord.Interaction):
         """
-        Two passes over this guild's non-completed enrollments:
+        Three passes over this guild's non-completed enrollments:
         1. Stamp last_content_delivered_at=now for rows missing it entirely
            (predates the delivery-timestamp rework).
-        2. Immediately fire the reminder for anyone already overdue — not
-           responded, not yet alerted, delivered over an hour ago. Covers
-           rows left stuck by the (now-fixed) alert-timer reset bug instead
-           of making them wait out another natural 24h cycle.
+        2. Immediately fire the reminder for anyone already overdue per their
+           current last_content_delivered_at — not responded, not yet
+           alerted, delivered over an hour ago.
+        3. Cross-check daily_progress (an insert-once log, never touched by
+           the old alert-timer reset bug) against enrollments for users whose
+           real overdue time was masked by that bug repeatedly bumping
+           last_content_delivered_at to "now". Backdates the timestamp to
+           its true value and fires the reminder now, instead of leaving
+           them to wait out another 24h measured from the bug's last touch.
         """
         if not await self._check_enabled(interaction):
             return
@@ -436,18 +443,42 @@ class AdminCog(commands.Cog):
 
         protocol_cog = self.bot.get_cog("ProtocolCog")
         alerted = []
+        drifted = []
+        failed = []
         if protocol_cog:
             due_now = await self.db.get_users_needing_alert(min_seconds=3600, alert_count=0)
             for row in due_now:
                 if row.get("guild_id") != interaction.guild.id:
                     continue
                 try:
-                    await protocol_cog._send_alert(row)
-                    alerted.append(row["user_id"])
+                    outcome = await protocol_cog._send_alert(row)
+                    if outcome == "sent":
+                        alerted.append(row["user_id"])
+                    elif outcome == "failed":
+                        failed.append(row["user_id"])
                 except Exception as exc:
                     logger.error(f"/fixreminders: failed to alert {row['user_id']}: {exc}")
+                    failed.append(row["user_id"])
 
-        if not fixed and not alerted:
+            candidates = await self.db.get_drift_candidates(
+                interaction.guild.id, min_seconds=3600, alert_count=0
+            )
+            for row in candidates:
+                user_id = row["user_id"]
+                await self.db.backdate_content_delivered(
+                    user_id, interaction.guild.id, row["_true_delivered_at"]
+                )
+                try:
+                    outcome = await protocol_cog._send_alert(row)
+                    if outcome == "sent":
+                        drifted.append(user_id)
+                    elif outcome == "failed":
+                        failed.append(user_id)
+                except Exception as exc:
+                    logger.error(f"/fixreminders: failed to alert drifted user {user_id}: {exc}")
+                    failed.append(user_id)
+
+        if not fixed and not alerted and not drifted and not failed:
             await interaction.followup.send(
                 "No stuck rows found — everyone has a delivery timestamp and no one is overdue for a reminder.",
                 ephemeral=True,
@@ -478,9 +509,32 @@ class AdminCog(commands.Cog):
                 inline=False,
             )
 
+        if drifted:
+            mentions = [f"<@{uid}>" for uid in drifted]
+            mentions_value = "\n".join(mentions[:20]) or "None"
+            if len(mentions) > 20:
+                mentions_value += f"\n… and {len(mentions) - 20} more"
+            embed.add_field(
+                name=f"Backdated + fired ({len(drifted)})",
+                value=mentions_value,
+                inline=False,
+            )
+
+        if failed:
+            mentions = [f"<@{uid}>" for uid in failed]
+            mentions_value = "\n".join(mentions[:20]) or "None"
+            if len(mentions) > 20:
+                mentions_value += f"\n… and {len(mentions) - 20} more"
+            embed.add_field(
+                name=f"⚠️ Could not deliver — training thread unavailable ({len(failed)})",
+                value=mentions_value + "\n(check logs — thread may be deleted/archived)",
+                inline=False,
+            )
+
         await interaction.followup.send(embed=embed, ephemeral=True)
         logger.info(
-            f"/fixreminders: backfilled {len(fixed)}, alerted {len(alerted)} in guild {interaction.guild.id}"
+            f"/fixreminders: backfilled {len(fixed)}, alerted {len(alerted)}, "
+            f"drift-repaired {len(drifted)}, failed {len(failed)} in guild {interaction.guild.id}"
         )
 
     # ──────────────────────────────────────────

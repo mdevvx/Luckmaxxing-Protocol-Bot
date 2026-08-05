@@ -33,6 +33,12 @@ class DatabaseBase(ABC):
 
     @abstractmethod
     async def unenroll_user(self, user_id: int, guild_id: int) -> bool:
+        """Fully wipe this user's data for this guild: enrollments,
+        daily_progress, issued_watch_tokens, and any video_watches rows
+        tied to those tokens. video_watches has no guild_id of its own, so
+        the wipe is scoped through issued_watch_tokens rather than deleting
+        by discord_id alone — otherwise it would also erase watch history
+        from other guilds the same user is separately enrolled in."""
         pass
 
     @abstractmethod
@@ -145,6 +151,30 @@ class DatabaseBase(ABC):
         pass
 
     @abstractmethod
+    async def get_drift_candidates(
+        self, guild_id: int, min_seconds: int, alert_count: int
+    ) -> List[Dict[str, Any]]:
+        """
+        Cross-checks daily_progress (an insert-once log, never touched by
+        the old alert-timer reset bug) — or enrolled_at for current_day <= 1,
+        which has no prior daily_progress row — against
+        enrollments.last_content_delivered_at to find users whose real
+        overdue time was masked by that bug repeatedly bumping the
+        timestamp to "now". Each returned row is augmented with
+        '_true_delivered_at'.
+        """
+        pass
+
+    @abstractmethod
+    async def backdate_content_delivered(
+        self, user_id: int, guild_id: int, delivered_at: str
+    ) -> bool:
+        """Correct a drift-affected last_content_delivered_at to its true
+        historical value, so future 24h calculations measure from the real
+        delivery time instead of the bug's last accidental touch."""
+        pass
+
+    @abstractmethod
     async def record_watch_token(
         self, guild_id: int, discord_id: int, day_number: int, token: str
     ) -> bool:
@@ -168,9 +198,16 @@ class DatabaseBase(ABC):
         pass
 
     @abstractmethod
-    async def has_watched_video(self, discord_id: int, day_number: int) -> bool:
-        """True if any video_watches row exists for this user/day, regardless
-        of whether the watch job has processed it yet. Used by the reminder
-        system to detect engagement on video days, since their link-out
-        button never fires an interaction we can see."""
+    async def has_watched_video(
+        self, discord_id: int, day_number: int, guild_id: int
+    ) -> bool:
+        """True if the most recently issued watch token for this user/day/
+        guild has a matching video_watches row, regardless of whether the
+        watch job has processed it yet. Scoped to the latest issued token
+        (a fresh one is issued on every delivery, including after a
+        re-enrollment) so a stale watch from this guild's previous cycle,
+        or one issued for a different guild entirely (video_watches itself
+        has no guild_id), can't falsely count as "watched now". Used by the
+        reminder system to detect engagement on video days, since their
+        link-out button never fires an interaction we can see."""
         pass

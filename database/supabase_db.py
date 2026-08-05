@@ -217,6 +217,30 @@ class SupabaseDatabase(DatabaseBase):
             enrollment_id = row.get("enrollment_id")
             enrollment_used = row.get("enrollment_used", False)
 
+            # video_watches has no guild_id of its own — scope the wipe
+            # through this guild's issued_watch_tokens rather than deleting
+            # by discord_id alone, so a re-enrollment leaves no leftover
+            # "already watched" row, without touching watch history from
+            # other guilds the same user is separately enrolled in.
+            try:
+                issued_resp = (
+                    client.table("issued_watch_tokens")
+                    .select("token")
+                    .eq("discord_id", user_id)
+                    .eq("guild_id", guild_id)
+                    .execute()
+                )
+                tokens = [r["token"] for r in issued_resp.data or []]
+                if tokens:
+                    client.table("video_watches").delete().in_(
+                        "token", tokens
+                    ).execute()
+                client.table("issued_watch_tokens").delete().eq(
+                    "discord_id", user_id
+                ).eq("guild_id", guild_id).execute()
+            except Exception as exc:
+                logger.warning(f"Could not delete video watch data: {exc}")
+
             try:
                 client.table("daily_progress").delete().eq("user_id", user_id).eq(
                     "guild_id", guild_id
@@ -234,7 +258,7 @@ class SupabaseDatabase(DatabaseBase):
                 except Exception as exc:
                     logger.warning(f"Could not free enrollment ID: {exc}")
 
-            logger.info(f"User {user_id} unenrolled from guild {guild_id}")
+            logger.info(f"User {user_id} unenrolled from guild {guild_id} — all progress data wiped")
             return True
         except Exception as exc:
             logger.error(f"unenroll_user: {exc}")
@@ -537,6 +561,90 @@ class SupabaseDatabase(DatabaseBase):
             logger.error(f"get_users_missing_delivery_timestamp: {exc}")
             return []
 
+    async def get_drift_candidates(
+        self, guild_id: int, min_seconds: int, alert_count: int
+    ) -> List[Dict[str, Any]]:
+        try:
+            client = self._get_client()
+            resp = (
+                client.table("enrollments")
+                .select("*")
+                .eq("guild_id", guild_id)
+                .eq("completed", False)
+                .eq("daily_alert_count", alert_count)
+                .execute()
+            )
+
+            now = datetime.utcnow()
+            result = []
+
+            for row in resp.data or []:
+                user_id = row["user_id"]
+                current_day = row["current_day"]
+
+                if current_day > 1:
+                    # Ground truth is the previous day's completion log —
+                    # insert-once, never touched by the drift bug.
+                    prog_resp = (
+                        client.table("daily_progress")
+                        .select("completed_at")
+                        .eq("user_id", user_id)
+                        .eq("guild_id", guild_id)
+                        .eq("day_number", current_day - 1)
+                        .order("completed_at", desc=True)
+                        .limit(1)
+                        .execute()
+                    )
+                    if not prog_resp.data:
+                        continue
+                    true_delivered_at = prog_resp.data[0]["completed_at"]
+                else:
+                    # Day 1 (current_day 0 or 1) has no prior daily_progress
+                    # row to anchor to — enrolled_at is set once at signup
+                    # and never touched again, close enough to the Day-1
+                    # delivery moment for a 24h-scale reminder.
+                    true_delivered_at = row.get("enrolled_at")
+                    if not true_delivered_at:
+                        continue
+
+                try:
+                    true_dt = datetime.fromisoformat(
+                        true_delivered_at.replace("Z", "+00:00")
+                    ).replace(tzinfo=None)
+                except Exception:
+                    continue
+
+                if (now - true_dt).total_seconds() < min_seconds:
+                    continue
+
+                # No last_button_click comparison here: that field gets
+                # stamped by the same day-completion event that writes this
+                # daily_progress row (a fraction of a second apart), so it
+                # would always look like a "response after delivery" even
+                # though it's the click that finished the *previous* day.
+                # current_day not having advanced past this day is itself
+                # the proof they haven't completed it; _send_alert applies
+                # its own accurate has_watched_video check before sending.
+                row["_true_delivered_at"] = true_delivered_at
+                result.append(row)
+
+            return result
+        except Exception as exc:
+            logger.error(f"get_drift_candidates: {exc}")
+            return []
+
+    async def backdate_content_delivered(
+        self, user_id: int, guild_id: int, delivered_at: str
+    ) -> bool:
+        try:
+            self._get_client().table("enrollments").update(
+                {"last_content_delivered_at": delivered_at}
+            ).eq("user_id", user_id).eq("guild_id", guild_id).execute()
+            return True
+        except Exception as exc:
+            logger.error(f"backdate_content_delivered: {exc}")
+            return False
+
     async def get_enrollment_by_channel(
         self, guild_id: int, channel_id: int
     ) -> Optional[Dict[str, Any]]:
@@ -763,18 +871,41 @@ class SupabaseDatabase(DatabaseBase):
             logger.error(f"mark_video_watch_processed: {exc}")
             return False
 
-    async def has_watched_video(self, discord_id: int, day_number: int) -> bool:
+    async def has_watched_video(
+        self, discord_id: int, day_number: int, guild_id: int
+    ) -> bool:
         try:
-            resp = (
-                self._get_client()
-                .table("video_watches")
-                .select("id")
+            client = self._get_client()
+
+            # A fresh token is issued every time this day's content is
+            # (re-)delivered (see record_watch_token), including after a
+            # re-enrollment. Only the most recently issued one represents
+            # the current cycle — matching against any older token would
+            # let a stale watch from a previous enrollment, or one issued
+            # for a different guild (video_watches itself has no guild_id),
+            # falsely count as "watched" now.
+            issued_resp = (
+                client.table("issued_watch_tokens")
+                .select("token")
                 .eq("discord_id", discord_id)
                 .eq("day_number", day_number)
+                .eq("guild_id", guild_id)
+                .order("created_at", desc=True)
                 .limit(1)
                 .execute()
             )
-            return bool(resp.data)
+            if not issued_resp.data:
+                return False
+            latest_token = issued_resp.data[0]["token"]
+
+            watch_resp = (
+                client.table("video_watches")
+                .select("id")
+                .eq("token", latest_token)
+                .limit(1)
+                .execute()
+            )
+            return bool(watch_resp.data)
         except Exception as exc:
             logger.error(f"has_watched_video: {exc}")
             return False

@@ -598,8 +598,15 @@ class ProtocolCog(commands.Cog):
                 f"Could not disable dialogue button in channel {channel.id}: {exc}"
             )
 
-    async def _send_alert(self, row: dict) -> None:
-        """Send the single reminder for a user who hasn't responded to their day's content."""
+    async def _send_alert(self, row: dict) -> str:
+        """
+        Send the single reminder for a user who hasn't responded to their
+        day's content. Returns "sent", "skipped" (video already watched —
+        not a failure), or "failed" (guild/thread unavailable), so callers
+        like /fixreminders can tell a genuine send apart from a deliberate
+        skip or a delivery failure instead of treating "no exception" as
+        success.
+        """
         user_id: int = row["user_id"]
         guild_id: int = row["guild_id"]
         # current_day sits at 0 while Day 1 is in progress (it only becomes 2
@@ -612,19 +619,25 @@ class ProtocolCog(commands.Cog):
         # watches. The existence of a video_watches row for this exact day
         # is the real signal they've engaged — the watch job may not have
         # advanced them yet, but a reminder would be wrong either way.
-        if get_day_video(day) and await self.db.has_watched_video(user_id, day):
+        if get_day_video(day) and await self.db.has_watched_video(user_id, day, guild_id):
             logger.info(
                 f"Skipping reminder for user {user_id} day {day} — video already watched"
             )
-            return
+            return "skipped"
 
         guild = self.bot.get_guild(guild_id)
         if not guild or not channel_id:
-            return
+            logger.warning(
+                f"Cannot alert user {user_id} day {day} — guild or channel_id missing"
+            )
+            return "failed"
 
         channel = await _get_training_channel(self.bot, channel_id, guild)
         if channel is None:
-            return
+            logger.warning(
+                f"Cannot alert user {user_id} day {day} — training thread {channel_id} unavailable"
+            )
+            return "failed"
 
         await channel.send(
             f"**Reminder, Chief.**\n\n"
@@ -633,6 +646,7 @@ class ProtocolCog(commands.Cog):
         )
         logger.info(f"Sent reminder for user {user_id} day {day}")
         await self.db.update_alert_count(user_id, guild_id, 1)
+        return "sent"
 
     async def _send_daily_alerts(self) -> None:
         """
