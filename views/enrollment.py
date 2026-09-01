@@ -1,10 +1,27 @@
-import discord
-import config
+import os
 from typing import Callable
 
+import discord
+
+import config
 from utils.logger import logger
 
-_BANNER_URL = "https://cdn.discordapp.com/attachments/1474746304608473200/1501241764525375649/bot_banner.png?ex=69fb5bd8&is=69fa0a58&hm=91e56d6121d9557b6b42cc219ddf6102850d0e8c3dd23f62aaa8b505b23610d0&"
+# Local asset instead of a hardcoded Discord CDN link — those URLs carry a
+# signed expiry (ex=/is=/hm=) and go dead once it passes, since nothing here
+# re-fetches a fresh one.
+_BANNER_PATH = os.path.join(
+    os.path.dirname(__file__), "..", "assets", "enrollment_banner.jpg"
+)
+_BANNER_FILENAME = "enrollment_banner.jpg"
+
+
+def enrollment_banner_file() -> discord.File | None:
+    """Build a fresh attachment for the enrollment banner, or None if the
+    asset is missing. discord.File wraps an open file handle, so a new one
+    is needed per send — never reuse an instance across messages."""
+    if not os.path.isfile(_BANNER_PATH):
+        return None
+    return discord.File(_BANNER_PATH, filename=_BANNER_FILENAME)
 
 _DESCRIPTION = (
     "Welcome to the **8-Day Luckmaxxing Training Program**.\n\n"
@@ -72,17 +89,21 @@ class EnrollmentView(discord.ui.LayoutView):
         )
         button.callback = self.enroll_button
 
-        self.add_item(
-            discord.ui.Container(
-                discord.ui.TextDisplay("## Luckmaxxing Protocol"),
-                discord.ui.MediaGallery(discord.MediaGalleryItem(media=_BANNER_URL)),
-                discord.ui.TextDisplay(_DESCRIPTION),
-                discord.ui.Separator(),
-                discord.ui.TextDisplay("-# Gorillions await you."),
-                discord.ui.ActionRow(button),
-                accent_colour=config.EMBED_COLOR,
+        children = [discord.ui.TextDisplay("## Luckmaxxing Protocol")]
+        if os.path.isfile(_BANNER_PATH):
+            children.append(
+                discord.ui.MediaGallery(
+                    discord.MediaGalleryItem(f"attachment://{_BANNER_FILENAME}")
+                )
             )
-        )
+        children += [
+            discord.ui.TextDisplay(_DESCRIPTION),
+            discord.ui.Separator(),
+            discord.ui.TextDisplay("-# Gorillions await you."),
+            discord.ui.ActionRow(button),
+        ]
+
+        self.add_item(discord.ui.Container(*children, accent_colour=config.EMBED_COLOR))
 
     async def enroll_button(self, interaction: discord.Interaction):
         try:

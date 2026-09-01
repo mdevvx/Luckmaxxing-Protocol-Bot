@@ -20,7 +20,7 @@ from utils.logger import logger
 from utils.watch_link import build_watch_url
 from views.dialogue import DialogueView
 from views.dm_ritual import DMRitualView
-from views.enrollment import EnrollmentView
+from views.enrollment import EnrollmentView, enrollment_banner_file
 from views.graduation import GraduationActionsView
 from views.text_card import TextCardView
 from views.video_day import VideoDayView
@@ -941,7 +941,7 @@ class ProtocolCog(commands.Cog):
                 return
 
         view = EnrollmentView(on_enroll=self.handle_enrollment)
-        await channel.send(view=view)
+        await channel.send(view=view, file=enrollment_banner_file())
 
         await interaction.response.send_message(
             f"Setup complete in {channel.mention}.", ephemeral=True
