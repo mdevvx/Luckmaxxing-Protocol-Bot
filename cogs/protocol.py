@@ -64,27 +64,6 @@ def _in_notify_window() -> bool:
     return False
 
 
-def _onboarding_view(user: discord.Member) -> TextCardView:
-    """Pinned container posted at the top of every private training thread."""
-    return TextCardView(
-        "Welcome to your Luckmaxxing Training Thread",
-        f"Hey {user.mention}, this is your private space for the 8-day program.\n\n"
-        "**How it works**\n"
-        "• Each day's lesson appears here as an interactive dialogue or video.\n"
-        "• Read the **Intern's** message, then click the button to speak your response.\n"
-        "• Complete the dialogue to finish the day.\n"
-        "• A new day unlocks automatically every 24 hours.\n\n"
-        "**This thread is your line** — notifications, offers, and everything else lands "
-        "here. Don't close it.\n\n"
-        "**Daily mantra** — repeat before sunrise and before any high-risk activity:\n"
-        "> *I am lucky. I am the luck.*\n\n"
-        "**Warning:** If you don't complete a day's training, you'll get one reminder. "
-        "If it still goes unanswered, that day's content reappears the next cycle.\n\n"
-        "Gorillions await you.",
-        "-# Only you and the bot can see this thread.",
-    )
-
-
 async def _get_training_channel(
     bot: commands.Bot, channel_id: int, guild: discord.Guild | None = None
 ) -> discord.Thread | None:
@@ -347,15 +326,17 @@ class ProtocolCog(commands.Cog):
             guild, channel, exclude_id=user.id, team_role_id=team_role_id
         )
 
-        # ── Post pinned onboarding embed + initiation button ──────
+        # ── Post pinned initiation card ────────────────────────────
         # Day 1 is not sent here — it drops when the user clicks the
-        # initiation button below (see handle_dm_ritual).
+        # initiation button (see handle_dm_ritual). This card also serves
+        # as the thread's welcome message, so it's the one that gets pinned.
         try:
-            onboarding_msg = await channel.send(view=_onboarding_view(user))
-            await onboarding_msg.pin()
-            await channel.send(view=DMRitualView(on_confirm=self.handle_dm_ritual))
+            dm_ritual_msg = await channel.send(
+                view=DMRitualView(on_confirm=self.handle_dm_ritual, user=user)
+            )
+            await dm_ritual_msg.pin()
         except Exception as exc:
-            logger.warning(f"Could not post onboarding messages: {exc}")
+            logger.warning(f"Could not post onboarding message: {exc}")
 
         # ── Confirm to the user ───────────────────────────────────
         await interaction.followup.send(

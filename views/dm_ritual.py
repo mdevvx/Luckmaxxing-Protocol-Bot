@@ -6,27 +6,30 @@ from utils.logger import logger
 
 _BUTTON_ID = "luckmaxx_dm_ritual"
 
-_DESCRIPTION = (
-    "## LUCKMAXXING PROTOCOL — INITIATION\n\n"
-    "Gm, lil gamblor.\n\n"
-    "For the next 8 days, Papi will tell you the story of a redacted peasant who looked "
-    "variance dead in the eyes, rejected statistical poverty, and became a glitch in the "
-    "Matrix.\n\n"
-    "The kind of glitch the house has no edge over anymore.\n"
-    "It just owes me now.\n"
-    "Inshallah.\n\n"
-    "Along the way, I'll hand you classified luckmaxxing knowledge: methods leaked from "
-    "2033, the kind the CIA burned millions on and buried.\n"
-    "Google it. I dare you.\n\n"
-    "By Day 8, you either become statistically illegal or remain exit liquidity with a "
-    "Discord account.\n"
-    "Watch carefully. Complete the training. Reject all evidence to the contrary.\n\n"
-    "My realest drops, personalized bonuses and 3AM gamba signals travel on a private "
-    "line.\n"
-    "I'm a god.\n"
-    "Gods don't do DMs.\n"
-    "My intern does."
-)
+
+def _build_description(user: discord.abc.User | None) -> str:
+    greeting = f"Gm, lil gamblor {user.mention}." if user else "Gm, lil gamblor."
+    return (
+        "## LUCKMAXXING PROTOCOL — INITIATION\n\n"
+        f"{greeting}\n\n"
+        "For the next 8 days, Papi will tell you the story of a redacted peasant who looked "
+        "variance dead in the eyes, rejected statistical poverty, and became a glitch in the "
+        "Matrix.\n\n"
+        "The kind of glitch the house has no edge over anymore.\n"
+        "It just owes me now.\n"
+        "Inshallah.\n\n"
+        "Along the way, I'll hand you classified luckmaxxing knowledge: methods leaked from "
+        "2033, the kind the CIA burned millions on and buried.\n"
+        "Google it. I dare you.\n\n"
+        "By Day 8, you either become statistically illegal or remain exit liquidity with a "
+        "Discord account.\n"
+        "Watch carefully. Complete the training. Reject all evidence to the contrary.\n\n"
+        "My realest drops, personalized bonuses and 3AM gamba signals travel on a private "
+        "line.\n"
+        "I'm a god.\n"
+        "Gods don't do DMs.\n"
+        "My intern does."
+    )
 
 _DM_MESSAGE = (
     "**GORILLION LINE ACTIVATED**\n\n"
@@ -46,13 +49,17 @@ class DMRitualView(discord.ui.LayoutView):
     Intro dialogue.
     """
 
-    def __init__(self, on_confirm: Callable):
+    def __init__(self, on_confirm: Callable, user: discord.abc.User | None = None):
         """
         Args:
             on_confirm: async callback(interaction, dm_ok: bool) — called
                 after the DM send attempt so the caller can persist the ack
                 and drop Day 1. Fires regardless of whether the DM
                 succeeded, since Day 1 delivery shouldn't depend on it.
+            user: the enrollee to greet by mention. Omitted on the
+                generic re-registration at cog_load (that instance is
+                never actually sent — it only exists so Discord can route
+                the button's persistent custom_id after a restart).
         """
         super().__init__(timeout=None)
         self._on_confirm = on_confirm
@@ -66,7 +73,7 @@ class DMRitualView(discord.ui.LayoutView):
 
         self.add_item(
             discord.ui.Container(
-                discord.ui.TextDisplay(_DESCRIPTION),
+                discord.ui.TextDisplay(_build_description(user)),
                 discord.ui.ActionRow(self._button),
                 accent_colour=config.EMBED_COLOR,
             )
