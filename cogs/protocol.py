@@ -7,7 +7,12 @@ from discord import app_commands
 from discord.ext import commands, tasks
 
 import config
-from content.training import get_content, get_day_title, get_day_video
+from content.training import (
+    get_content,
+    get_day_banner_path,
+    get_day_title,
+    get_day_video,
+)
 from database import get_database
 from database.base import DatabaseBase
 from utils.bot_logger import BotLogger
@@ -492,6 +497,10 @@ class ProtocolCog(commands.Cog):
         async def on_day_done(_user):
             await self._advance_day(user, guild_id, day, channel)
 
+        banner_path = get_day_banner_path(day)
+        banner_file = discord.File(banner_path) if banner_path else None
+        banner_filename = banner_file.filename if banner_file else None
+
         video = get_day_video(day)
         if video:
             watch_url, watch_token = build_watch_url(video["url"], day, user.id)
@@ -500,8 +509,9 @@ class ProtocolCog(commands.Cog):
                 get_day_title(day),
                 watch_url,
                 caption=video.get("caption"),
+                banner_filename=banner_filename,
             )
-            await self._post_container(channel, video_view)
+            await self._post_container(channel, video_view, file=banner_file)
         else:
             view = DialogueView(
                 get_day_title(day),
@@ -511,8 +521,9 @@ class ProtocolCog(commands.Cog):
                 on_button_click=lambda: asyncio.create_task(
                     self.db.update_last_button_click(user.id, guild_id)
                 ),
+                banner_filename=banner_filename,
             )
-            await self._post_container(channel, view)
+            await self._post_container(channel, view, file=banner_file)
 
     async def send_day_content(
         self,
@@ -546,9 +557,10 @@ class ProtocolCog(commands.Cog):
     async def _post_container(
         channel: discord.Thread,
         view: DialogueView | VideoDayView,
+        file: discord.File | None = None,
     ):
         """Send a day's lesson as a single Components V2 container."""
-        msg = await channel.send(view=view)
+        msg = await channel.send(view=view, file=file)
         view.message = msg
 
     # ──────────────────────────────────────────

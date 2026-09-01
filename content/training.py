@@ -9,7 +9,14 @@ Day 1 -> First real lesson (sent immediately when the user activates the
 Days 2-8 -> Delivered automatically every 24 hours.
 """
 
+import os
+
 from database.training_videos import get_training_video
+
+# Per-day banner images live here as day1.jpg, day2.png, etc. — dropped in by
+# hand as each one is provided, no DB row or redeploy of code logic needed.
+_BANNER_DIR = os.path.join(os.path.dirname(__file__), "..", "assets", "day_banners")
+_BANNER_EXTS = ("jpg", "jpeg", "png", "webp")
 
 DAY_1 = [
     (
@@ -317,3 +324,13 @@ def get_day_title(day: int) -> str:
 def get_day_video(day: int) -> dict | None:
     """Return the {"url", "caption"} mapping for the given day's video, if it has one."""
     return get_training_video(day)
+
+
+def get_day_banner_path(day: int) -> str | None:
+    """Return the local file path for this day's banner image, or None if
+    one hasn't been dropped into assets/day_banners/ yet."""
+    for ext in _BANNER_EXTS:
+        path = os.path.join(_BANNER_DIR, f"day{day}.{ext}")
+        if os.path.isfile(path):
+            return path
+    return None

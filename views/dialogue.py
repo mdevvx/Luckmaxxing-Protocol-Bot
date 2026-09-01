@@ -29,6 +29,7 @@ class DialogueView(discord.ui.LayoutView):
         user_id: Optional[int] = None,
         timeout: float = 600,
         on_button_click: Optional[Callable] = None,
+        banner_filename: Optional[str] = None,
     ):
         super().__init__(timeout=timeout)
         self.title = title
@@ -36,6 +37,7 @@ class DialogueView(discord.ui.LayoutView):
         self.on_complete_callback = on_complete
         self.on_button_click = on_button_click
         self.user_id = user_id
+        self.banner_filename = banner_filename
         self.current_index: int = 0
         self.message: Optional[discord.Message] = None
         self._completed = False
@@ -44,11 +46,22 @@ class DialogueView(discord.ui.LayoutView):
         self._body = discord.ui.TextDisplay(self._body_text())
         self._button = discord.ui.Button()
 
+        container_children = []
+        if banner_filename:
+            container_children.append(
+                discord.ui.MediaGallery(
+                    discord.MediaGalleryItem(f"attachment://{banner_filename}")
+                )
+            )
+        container_children += [
+            self._header,
+            self._body,
+            discord.ui.ActionRow(self._button),
+        ]
+
         self.add_item(
             discord.ui.Container(
-                self._header,
-                self._body,
-                discord.ui.ActionRow(self._button),
+                *container_children,
                 accent_colour=config.EMBED_COLOR,
             )
         )
@@ -141,6 +154,7 @@ class DialogueView(discord.ui.LayoutView):
             user_id=self.user_id,
             timeout=timeout,
             on_button_click=self.on_button_click,
+            banner_filename=self.banner_filename,
         )
         resumed_view.current_index = self.current_index
         resumed_view.message = self.message

@@ -11,8 +11,9 @@ class VideoDayView(discord.ui.LayoutView):
     the tracked /watch page (the video itself is hosted on the website, not
     embedded in Discord, so watch completion can be tracked server-side).
 
-    Layout: title -> caption -> "Watch Video" link button, all inside
-    a single Container so it renders as one card.
+    Layout: banner image (if one's been set for this day) -> title ->
+    caption -> "Watch Video" link button, all inside a single Container so
+    it renders as one card.
 
     Posted in the user's private training thread. Day progression is not
     driven by this view — it advances once the watch is recorded on the
@@ -24,10 +25,18 @@ class VideoDayView(discord.ui.LayoutView):
         title: str,
         watch_url: str,
         caption: Optional[str] = None,
+        banner_filename: Optional[str] = None,
     ):
         super().__init__(timeout=None)
 
-        children = [discord.ui.TextDisplay(f"## {title}")]
+        children = []
+        if banner_filename:
+            children.append(
+                discord.ui.MediaGallery(
+                    discord.MediaGalleryItem(f"attachment://{banner_filename}")
+                )
+            )
+        children.append(discord.ui.TextDisplay(f"## {title}"))
         if caption:
             children.append(discord.ui.TextDisplay(caption))
         children.append(discord.ui.Separator())
