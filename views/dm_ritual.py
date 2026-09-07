@@ -67,6 +67,19 @@ class DMRitualView(discord.ui.LayoutView):
         )
 
     async def _on_click(self, interaction: discord.Interaction):
+        # Guard first, ack second, slow work (the DM send) last. Discord
+        # requires a response within 3s or it tells the user the
+        # interaction failed — which invites a re-click. Disabling the
+        # button only *after* a slow DM send left that whole window open
+        # for a second click to slip through and send a duplicate DM.
+        if self._button.disabled:
+            await interaction.response.defer()
+            return
+
+        self._button.disabled = True
+        self._button.label = "Reported to Papi"
+        await interaction.response.edit_message(view=self)
+
         dm_ok = True
         try:
             await interaction.user.send(_DM_MESSAGE)
@@ -75,10 +88,6 @@ class DMRitualView(discord.ui.LayoutView):
         except Exception as exc:
             logger.error(f"DMRitualView._on_click send failed: {exc}")
             dm_ok = False
-
-        self._button.disabled = True
-        self._button.label = "Reported to Papi"
-        await interaction.response.edit_message(view=self)
 
         if not dm_ok:
             await interaction.followup.send(
