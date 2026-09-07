@@ -24,18 +24,19 @@ def enrollment_banner_file() -> discord.File | None:
     return discord.File(_BANNER_PATH, filename=_BANNER_FILENAME)
 
 _DESCRIPTION = (
-    "Welcome to the **8-Day Luckmaxxing Training Program**.\n\n"
-    "Transform from an average gamblor into a statistical anomaly. "
-    "Daily interactive lessons will be delivered in your own private thread.\n\n"
-    "**What to expect**\n"
-    "• Intro + Day 1 on enrollment\n"
-    "• Days 2 – 8 delivered automatically every 24 hours\n"
-    "• Click through dialogue to progress\n"
-    "• Scientifically-backed luck cultivation techniques\n\n"
-    "**Requirements**\n"
-    "• A valid enrollment code from an admin\n"
-    "• Commitment to daily practice\n\n"
-    "Click **Enroll** and enter your code to begin."
+    "Gm, lil gamblor.\n\n"
+    "For the next 8 days, Papi will tell you the story of a redacted peasant who looked "
+    "variance dead in the eyes, rejected statistical poverty, and became a glitch in the "
+    "Matrix.\n\n"
+    "The kind of glitch the house has no edge over anymore.\n"
+    "It just owes me now.\n"
+    "Inshallah.\n\n"
+    "Along the way, I'll hand you classified luckmaxxing knowledge: methods leaked from "
+    "2033, the kind the CIA burned millions on and buried.\n"
+    "Google it. I dare you.\n\n"
+    "By Day 8, you either become statistically illegal or remain exit liquidity with a "
+    "Discord account.\n"
+    "Watch carefully. Complete the training. Reject all evidence to the contrary."
 )
 
 
@@ -83,13 +84,13 @@ class EnrollmentView(discord.ui.LayoutView):
         self._on_enroll = on_enroll
 
         button = discord.ui.Button(
-            label="Enroll in Luckmaxxing Protocol",
+            label="Me wants to luckmaxx",
             style=discord.ButtonStyle.success,
             custom_id="luckmaxx_enroll",  # Stable ID required for persistence
         )
         button.callback = self.enroll_button
 
-        children = [discord.ui.TextDisplay("## Luckmaxxing Protocol")]
+        children = [discord.ui.TextDisplay("## LUCKMAXXING PROTOCOL — INITIATION")]
         if os.path.isfile(_BANNER_PATH):
             children.append(
                 discord.ui.MediaGallery(
