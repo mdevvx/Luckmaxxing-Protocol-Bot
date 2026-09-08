@@ -541,7 +541,10 @@ class ProtocolCog(commands.Cog):
         file: discord.File | None = None,
     ):
         """Send a day's lesson as a single Components V2 container."""
-        msg = await channel.send(view=view, file=file)
+        if file is not None:
+            msg = await channel.send(view=view, file=file)
+        else:
+            msg = await channel.send(view=view)
         view.message = msg
 
     # ──────────────────────────────────────────
@@ -922,7 +925,11 @@ class ProtocolCog(commands.Cog):
                 return
 
         view = EnrollmentView(on_enroll=self.handle_enrollment)
-        await channel.send(view=view, file=enrollment_banner_file())
+        banner = enrollment_banner_file()
+        if banner is not None:
+            await channel.send(view=view, file=banner)
+        else:
+            await channel.send(view=view)
 
         await interaction.response.send_message(
             f"Setup complete in {channel.mention}.", ephemeral=True
