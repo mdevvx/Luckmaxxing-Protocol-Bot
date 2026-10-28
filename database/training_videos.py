@@ -38,6 +38,42 @@ def get_training_video(day: int) -> Optional[Dict[str, Any]]:
     return rows[0] if rows else None
 
 
+def get_day_image(day: int) -> Optional[str]:
+    """Return the banner image URL for the given day, or None if unset."""
+    try:
+        response = (
+            _get_client()
+            .table("day_images")
+            .select("url")
+            .eq("day_number", day)
+            .limit(1)
+            .execute()
+        )
+    except Exception as exc:
+        logger.error(f"Failed to fetch day image for day {day}: {exc}")
+        return None
+
+    rows = response.data or []
+    return rows[0]["url"] if rows else None
+
+
+def set_day_image(day: int, url: str) -> bool:
+    """Insert or update the banner image row for the given day."""
+    try:
+        _get_client().table("day_images").upsert(
+            {
+                "day_number": day,
+                "url": url,
+                "updated_at": datetime.utcnow().isoformat(),
+            },
+            on_conflict="day_number",
+        ).execute()
+        return True
+    except Exception as exc:
+        logger.error(f"Failed to set day image for day {day}: {exc}")
+        return False
+
+
 def set_training_video(day: int, url: str, caption: Optional[str] = None) -> bool:
     """Insert or update the training video row for the given day."""
     try:

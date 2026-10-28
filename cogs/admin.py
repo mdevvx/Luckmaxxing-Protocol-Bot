@@ -6,7 +6,7 @@ from typing import Optional
 
 from database import get_database
 from database.base import DatabaseBase
-from database.training_videos import set_training_video
+from database.training_videos import set_day_image, set_training_video
 from utils.bot_logger import BotLogger
 from utils.logger import logger
 from views.confirm import ConfirmView
@@ -322,6 +322,61 @@ class AdminCog(commands.Cog):
         await interaction.followup.send(embed=embed, ephemeral=True)
         logger.info(
             f"Training video for day {day} set by {interaction.user.id} in guild {interaction.guild.id}"
+        )
+
+    # ──────────────────────────────────────────
+    #  /setimage
+    # ──────────────────────────────────────────
+
+    @app_commands.command(
+        name="setimage",
+        description="Set or update the banner image for a day (Admin only)",
+    )
+    @app_commands.describe(
+        day="Day number (1-8)",
+        url="Public, non-expiring image URL",
+    )
+    @app_commands.default_permissions(administrator=True)
+    async def set_image(
+        self,
+        interaction: discord.Interaction,
+        day: int,
+        url: str,
+    ):
+        if not await self._check_enabled(interaction):
+            return
+        if not 1 <= day <= config.TOTAL_DAYS:
+            await interaction.response.send_message(
+                f"Day must be between 1 and {config.TOTAL_DAYS}.", ephemeral=True
+            )
+            return
+        if not url.startswith("https://"):
+            await interaction.response.send_message(
+                "URL must start with https://", ephemeral=True
+            )
+            return
+        if "/object/sign/" in url:
+            await interaction.response.send_message(
+                "That's a **signed** Supabase URL — it will expire and break the image later.\n"
+                "Make the bucket Public in Supabase Storage and use the `/object/public/...` "
+                "URL instead (no `?token=`).",
+                ephemeral=True,
+            )
+            return
+
+        await interaction.response.defer(ephemeral=True)
+        if not set_day_image(day, url):
+            await interaction.followup.send(
+                "Failed to save the image. Please try again.", ephemeral=True
+            )
+            return
+
+        embed = discord.Embed(title=f"Day {day} Image Updated", color=config.EMBED_COLOR)
+        embed.add_field(name="URL", value=url, inline=False)
+        embed.set_image(url=url)
+        await interaction.followup.send(embed=embed, ephemeral=True)
+        logger.info(
+            f"Day image for day {day} set by {interaction.user.id} in guild {interaction.guild.id}"
         )
 
     # ──────────────────────────────────────────

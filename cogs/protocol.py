@@ -24,6 +24,7 @@ from views.dm_ritual import DMRitualView
 from views.enrollment import EnrollmentView, enrollment_banner_file
 from views.graduation import GraduationActionsView
 from views.text_card import TextCardView
+from database.training_videos import get_day_image
 from views.video_day import VideoDayView
 
 # ──────────────────────────────────────────────────────────────────
@@ -497,9 +498,13 @@ class ProtocolCog(commands.Cog):
         async def on_day_done(_user):
             await self._advance_day(user, guild_id, day, channel)
 
-        banner_path = get_day_banner_path(day)
-        banner_file = discord.File(banner_path) if banner_path else None
-        banner_filename = banner_file.filename if banner_file else None
+        # An image set via /setimage wins over a local assets/day_banners file.
+        banner_file = None
+        banner_filename = get_day_image(day)
+        if not banner_filename:
+            banner_path = get_day_banner_path(day)
+            banner_file = discord.File(banner_path) if banner_path else None
+            banner_filename = banner_file.filename if banner_file else None
 
         video = get_day_video(day)
         if video:

@@ -206,6 +206,16 @@ CREATE TABLE IF NOT EXISTS training_videos (
 ALTER TABLE training_videos DISABLE ROW LEVEL SECURITY;
 GRANT ALL PRIVILEGES ON training_videos TO service_role;
 
+-- Per-day banner image URLs, set via /setimage (see database/training_videos.py).
+CREATE TABLE IF NOT EXISTS day_images (
+    day_number INTEGER     PRIMARY KEY,
+    url        TEXT        NOT NULL,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+ALTER TABLE day_images DISABLE ROW LEVEL SECURITY;
+GRANT ALL PRIVILEGES ON day_images TO service_role;
+
 -- Seed placeholders — replace url/caption with the real hosted links,
 -- or update the rows directly in Supabase later.
 INSERT INTO training_videos (day_number, url, caption) VALUES

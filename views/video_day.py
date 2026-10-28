@@ -33,7 +33,11 @@ class VideoDayView(discord.ui.LayoutView):
         if banner_filename:
             children.append(
                 discord.ui.MediaGallery(
-                    discord.MediaGalleryItem(f"attachment://{banner_filename}")
+                    discord.MediaGalleryItem(
+                        banner_filename
+                        if banner_filename.startswith("https://")
+                        else f"attachment://{banner_filename}"
+                    )
                 )
             )
         children.append(discord.ui.TextDisplay(f"## {title}"))
