@@ -25,7 +25,7 @@ def enrollment_banner_file() -> discord.File | None:
 
 _DESCRIPTION = (
     "Gm, lil gamblor.\n\n"
-    "For the next 8 days, Papi will tell you the story of a redacted peasant who looked "
+    "Over the coming days, Papi will tell you the story of a redacted peasant who looked "
     "variance dead in the eyes, rejected statistical poverty, and became a glitch in the "
     "Matrix.\n\n"
     "The kind of glitch the house has no edge over anymore.\n"
@@ -34,9 +34,10 @@ _DESCRIPTION = (
     "Along the way, I'll hand you classified luckmaxxing knowledge: methods leaked from "
     "2033, the kind the CIA burned millions on and buried.\n"
     "Google it. I dare you.\n\n"
-    "By Day 8, you either become statistically illegal or remain exit liquidity with a "
-    "Discord account.\n"
-    "Watch carefully. Complete the training. Reject all evidence to the contrary."
+    "The transmissions will arrive when Papi decides you're ready.\n\n"
+    "By the end of this story, you either become statistically illegal or remain exit "
+    "liquidity with a Discord account.\n\n"
+    "Watch carefully. Follow the story. Reject all evidence to the contrary."
 )
 
 

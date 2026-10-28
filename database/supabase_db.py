@@ -436,6 +436,25 @@ class SupabaseDatabase(DatabaseBase):
             logger.error(f"get_all_enrolled_users: {exc}")
             return []
 
+    async def get_users_on_day(
+        self, guild_id: int, day: int
+    ) -> List[Dict[str, Any]]:
+        """Non-completed enrollments in `guild_id` whose current_day == day."""
+        try:
+            resp = (
+                self._get_client()
+                .table("enrollments")
+                .select("*")
+                .eq("guild_id", guild_id)
+                .eq("completed", False)
+                .eq("current_day", day)
+                .execute()
+            )
+            return resp.data or []
+        except Exception as exc:
+            logger.error(f"get_users_on_day: {exc}")
+            return []
+
     async def update_content_delivered(self, user_id: int, guild_id: int) -> bool:
         """
         Called when a day's dialogue is freshly delivered.

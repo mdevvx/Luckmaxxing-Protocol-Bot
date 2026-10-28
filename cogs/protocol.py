@@ -1,5 +1,6 @@
 import asyncio
 from datetime import datetime
+from typing import Optional
 
 import discord
 import pytz
@@ -146,27 +147,39 @@ class ProtocolCog(commands.Cog):
         team_role_id: int | None,
     ) -> None:
         """
-        Add team-role members, administrators, and the guild owner to a
-        private training thread so staff can see it without being invited.
+        Give the team role access to private training threads without adding
+        members one by one (which spams "added X to the thread" messages).
+        Members with Manage Threads on the parent channel can see and post in
+        every private thread under it; admins and the owner already can.
         """
         team_role = guild.get_role(team_role_id) if team_role_id else None
+        parent = thread.parent
+        if not team_role or not parent:
+            return
 
-        staff: set[discord.Member] = set()
-        for member in guild.members:
-            if member.id == exclude_id or member.bot:
-                continue
-            if member.guild_permissions.administrator or member.id == guild.owner_id:
-                staff.add(member)
-            elif team_role and team_role in member.roles:
-                staff.add(member)
+        overwrite = parent.overwrites_for(team_role)
+        if (
+            overwrite.manage_threads
+            and overwrite.view_channel
+            and overwrite.send_messages_in_threads
+        ):
+            return
 
-        for member in staff:
-            try:
-                await thread.add_user(member)
-            except discord.Forbidden:
-                logger.warning(f"Missing permission to add {member.id} to thread {thread.id}")
-            except Exception as exc:
-                logger.warning(f"Could not add {member.id} to thread {thread.id}: {exc}")
+        overwrite.view_channel = True
+        overwrite.manage_threads = True
+        overwrite.send_messages_in_threads = True
+        try:
+            await parent.set_permissions(
+                team_role,
+                overwrite=overwrite,
+                reason="Team role access to private training threads",
+            )
+        except discord.Forbidden:
+            logger.warning(
+                f"Missing permission to set team role overwrite on channel {parent.id}"
+            )
+        except Exception as exc:
+            logger.warning(f"Could not set team role overwrite on {parent.id}: {exc}")
 
     # ──────────────────────────────────────────
     #  Enrollment handler
@@ -321,7 +334,7 @@ class ProtocolCog(commands.Cog):
         # ── Persist thread ID ──────────────────────────────────────
         await self.db.save_channel_id(user.id, guild_id, channel.id)
 
-        # ── Invite staff: team role + admins + owner ────────────────
+        # ── Staff access: team role via channel permissions (silent) ─
         await self._add_staff_to_thread(
             guild, channel, exclude_id=user.id, team_role_id=team_role_id
         )
@@ -332,7 +345,12 @@ class ProtocolCog(commands.Cog):
         # as the thread's welcome message, so it's the one that gets pinned.
         try:
             dm_ritual_msg = await channel.send(
-                view=DMRitualView(on_confirm=self.handle_dm_ritual, user=user)
+                view=DMRitualView(
+                    on_confirm=self.handle_dm_ritual,
+                    user=user,
+                    team_role=guild.get_role(team_role_id) if team_role_id else None,
+                ),
+                allowed_mentions=discord.AllowedMentions(users=[user], roles=True),
             )
             await dm_ritual_msg.pin()
         except Exception as exc:
@@ -454,8 +472,9 @@ class ProtocolCog(commands.Cog):
             logger.info(f"User {user.id} completed training in guild {guild_id}")
         else:
             await channel.send(
-                f"**Day {day} complete!**\n"
-                f"Day {next_day} training will arrive in 24 hours. Keep pushing."
+                f"**Part {day} complete!**\n\n"
+                f"Part {next_day} of the story will arrive when Papi decides you're ready.\n\n"
+                "Please refrain from becoming rich without supervision."
             )
             await self.bot_log.day_complete(guild, user, day)
 
@@ -679,6 +698,9 @@ class ProtocolCog(commands.Cog):
 
     async def _deliver_daily_content(self):
         """Send next-day (or same-day retry) training to every user whose 24-hour window has elapsed."""
+        if config.MANUAL_RELEASE:
+            return  # days 2+ go out via /release
+
         enrollments = await self.db.get_all_enrolled_users()
         if not enrollments:
             return
@@ -935,6 +957,69 @@ class ProtocolCog(commands.Cog):
             f"Setup complete in {channel.mention}.", ephemeral=True
         )
         logger.info(f"Protocol setup in guild {interaction.guild.id}")
+
+    @app_commands.command(
+        name="release",
+        description="Send a day's content to users waiting on it (Admin only)",
+    )
+    @app_commands.describe(
+        day="Day to release (2-8) — goes to everyone currently waiting on that day",
+        user="Only release to this user instead of everyone waiting",
+    )
+    @app_commands.default_permissions(administrator=True)
+    async def release_day(
+        self,
+        interaction: discord.Interaction,
+        day: int,
+        user: Optional[discord.Member] = None,
+    ):
+        if not await self._check_enabled(interaction):
+            return
+        if not 2 <= day <= config.TOTAL_DAYS:
+            await interaction.response.send_message(
+                f"Day must be between 2 and {config.TOTAL_DAYS}.", ephemeral=True
+            )
+            return
+        if not get_content(day):
+            await interaction.response.send_message(
+                f"No content is set up for day {day} yet.", ephemeral=True
+            )
+            return
+
+        await interaction.response.defer(ephemeral=True)
+        guild_id = interaction.guild.id
+
+        rows = await self.db.get_users_on_day(guild_id, day)
+        if user:
+            rows = [r for r in rows if r["user_id"] == user.id]
+
+        sent, failed = 0, 0
+        for row in rows:
+            user_id = row["user_id"]
+            try:
+                target = await self.bot.fetch_user(user_id)
+                if row.get("channel_id"):
+                    ch = await _get_training_channel(
+                        self.bot, row["channel_id"], interaction.guild
+                    )
+                    if ch:
+                        await self._disable_active_dialogue_button(ch)
+                await self.send_day_content(target, guild_id, day)
+                await self.db.update_content_delivered(user_id, guild_id)
+                await self.bot_log.daily_delivery(interaction.guild, target, day)
+                sent += 1
+            except Exception as exc:
+                failed += 1
+                logger.error(f"/release day {day} failed for {user_id}: {exc}", exc_info=True)
+            await asyncio.sleep(0.5)
+
+        msg = f"Day {day} released to **{sent}** user(s)."
+        if failed:
+            msg += f" **{failed}** failed — check logs."
+        if not rows:
+            msg = f"Nobody is currently waiting on day {day}."
+        await interaction.followup.send(msg, ephemeral=True)
+        logger.info(f"/release day {day} by {interaction.user.id}: sent={sent} failed={failed}")
 
     @app_commands.command(
         name="stats", description="View Luckmaxxing Protocol statistics"

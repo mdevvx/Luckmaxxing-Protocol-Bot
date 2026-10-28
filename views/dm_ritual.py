@@ -36,7 +36,12 @@ class DMRitualView(discord.ui.LayoutView):
     Intro dialogue.
     """
 
-    def __init__(self, on_confirm: Callable, user: discord.abc.User | None = None):
+    def __init__(
+        self,
+        on_confirm: Callable,
+        user: discord.abc.User | None = None,
+        team_role: discord.Role | None = None,
+    ):
         """
         Args:
             on_confirm: async callback(interaction, dm_ok: bool) — called
@@ -58,12 +63,17 @@ class DMRitualView(discord.ui.LayoutView):
         )
         self._button.callback = self._on_click
 
+        children: list[discord.ui.Item] = [
+            discord.ui.TextDisplay(_build_description(user)),
+            discord.ui.ActionRow(self._button),
+        ]
+        if team_role:
+            # Footer line: the role mention silently adds team members to the
+            # private thread (no "added to the thread" system lines).
+            children.append(discord.ui.TextDisplay(f"-# {team_role.mention} new training thread opened."))
+
         self.add_item(
-            discord.ui.Container(
-                discord.ui.TextDisplay(_build_description(user)),
-                discord.ui.ActionRow(self._button),
-                accent_colour=config.EMBED_COLOR,
-            )
+            discord.ui.Container(*children, accent_colour=config.EMBED_COLOR)
         )
 
     async def _on_click(self, interaction: discord.Interaction):

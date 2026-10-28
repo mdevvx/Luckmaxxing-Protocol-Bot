@@ -16,6 +16,8 @@ WATCH_BASE_URL: str = os.getenv("WATCH_BASE_URL", "https://hypergamble.bet/watch
 
 # ── Bot settings ─────────────────────────────────────────────────
 TOTAL_DAYS: int = 8
+# Day 1 is sent automatically; days 2+ are released by an admin via /release.
+MANUAL_RELEASE: bool = True
 PROTOCOL_CHANNEL_NAME: str = "luckmaxxing-protocol"
 GRADUATE_ROLE_NAME: str = "Luckmaxxed Gamblor"
 

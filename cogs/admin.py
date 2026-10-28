@@ -313,7 +313,9 @@ class AdminCog(commands.Cog):
             )
             return
 
-        embed = discord.Embed(title=f"Day {day} Video Updated", color=config.EMBED_COLOR)
+        embed = discord.Embed(
+            title=f"Day {day} Video Updated", color=config.EMBED_COLOR
+        )
         embed.add_field(name="URL", value=url, inline=False)
         if caption:
             embed.add_field(name="Caption", value=caption, inline=False)
@@ -434,7 +436,9 @@ class AdminCog(commands.Cog):
             return
         await interaction.response.defer(ephemeral=True)
 
-        missing = await self.db.get_users_missing_delivery_timestamp(interaction.guild.id)
+        missing = await self.db.get_users_missing_delivery_timestamp(
+            interaction.guild.id
+        )
         fixed = []
         for row in missing:
             user_id = row["user_id"]
@@ -446,7 +450,9 @@ class AdminCog(commands.Cog):
         drifted = []
         failed = []
         if protocol_cog:
-            due_now = await self.db.get_users_needing_alert(min_seconds=3600, alert_count=0)
+            due_now = await self.db.get_users_needing_alert(
+                min_seconds=3600, alert_count=0
+            )
             for row in due_now:
                 if row.get("guild_id") != interaction.guild.id:
                     continue
@@ -457,7 +463,9 @@ class AdminCog(commands.Cog):
                     elif outcome == "failed":
                         failed.append(row["user_id"])
                 except Exception as exc:
-                    logger.error(f"/fixreminders: failed to alert {row['user_id']}: {exc}")
+                    logger.error(
+                        f"/fixreminders: failed to alert {row['user_id']}: {exc}"
+                    )
                     failed.append(row["user_id"])
 
             candidates = await self.db.get_drift_candidates(
@@ -475,7 +483,9 @@ class AdminCog(commands.Cog):
                     elif outcome == "failed":
                         failed.append(user_id)
                 except Exception as exc:
-                    logger.error(f"/fixreminders: failed to alert drifted user {user_id}: {exc}")
+                    logger.error(
+                        f"/fixreminders: failed to alert drifted user {user_id}: {exc}"
+                    )
                     failed.append(user_id)
 
         if not fixed and not alerted and not drifted and not failed:
@@ -485,7 +495,9 @@ class AdminCog(commands.Cog):
             )
             return
 
-        embed = discord.Embed(title="Reminder Backfill Complete", color=config.EMBED_COLOR)
+        embed = discord.Embed(
+            title="Reminder Backfill Complete", color=config.EMBED_COLOR
+        )
 
         if fixed:
             mentions = [f"<@{uid}>" for uid in fixed]
@@ -527,7 +539,8 @@ class AdminCog(commands.Cog):
                 mentions_value += f"\n… and {len(mentions) - 20} more"
             embed.add_field(
                 name=f"⚠️ Could not deliver — training thread unavailable ({len(failed)})",
-                value=mentions_value + "\n(check logs — thread may be deleted/archived)",
+                value=mentions_value
+                + "\n(check logs — thread may be deleted/archived)",
                 inline=False,
             )
 
@@ -618,7 +631,9 @@ class AdminCog(commands.Cog):
             name="Latency", value=f"{round(self.bot.latency * 1000)}ms", inline=True
         )
         embed.add_field(name="Servers", value=len(self.bot.guilds), inline=True)
-        embed.add_field(name="Threads Channel", value=threads_channel_label, inline=True)
+        embed.add_field(
+            name="Threads Channel", value=threads_channel_label, inline=True
+        )
         embed.add_field(name="Enrollment Role", value=role_label, inline=True)
         embed.add_field(
             name="Completion Role", value=completion_role_label, inline=True
@@ -642,7 +657,9 @@ class AdminCog(commands.Cog):
         is_owner = ctx.author.id == app_info.owner.id
         is_admin = ctx.author.guild_permissions.administrator
         if not (is_owner or is_admin):
-            await ctx.reply("Only the bot owner or a server admin can use this command.")
+            await ctx.reply(
+                "Only the bot owner or a server admin can use this command."
+            )
             return
 
         try:

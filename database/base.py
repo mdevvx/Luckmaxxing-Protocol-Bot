@@ -67,6 +67,12 @@ class DatabaseBase(ABC):
         pass
 
     @abstractmethod
+    async def get_users_on_day(
+        self, guild_id: int, day: int
+    ) -> List[Dict[str, Any]]:
+        pass
+
+    @abstractmethod
     async def update_last_button_click(self, user_id: int, guild_id: int) -> bool:
         pass
 
