@@ -673,6 +673,8 @@ class ProtocolCog(commands.Cog):
         Fire a single reminder ~24h after content delivery if the user hasn't
         responded. Skipped once the user clicks any button (last_button_click resets).
         """
+        if config.MANUAL_RELEASE:
+            return  # days go out via /release, so no automatic reminders
         for row in await self.db.get_users_needing_alert(
             min_seconds=_ALERT_SECONDS, alert_count=0
         ):
